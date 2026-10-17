@@ -25,8 +25,13 @@ def sample_data():
         "rules": [{"name": "Known Malicious IP Detected", "count": 9, "sev": "Low"}],
         "alerts": [{"t": "2026-10-17T10:00:00Z", "sev": "High", "name": "Audit Log Tampering Detection",
                     "source": "dependable", "ip": "::1", "technique": "T1070.001 - Indicator Removal"}],
+        "types": [{"name": "firewall-sophos-xg", "count": 900}, {"name": "o365", "count": 100}],
         "geo": {"per_min": 5, "denied": 20, "total": 50, "window_s": 86400,
                 "countries": [{"country": "Russia", "cc": "RU", "count": 10, "denied": 8}]},
+        "cluster": {"status": "green", "nodes": 1, "active_pct": 100.0, "unassigned": 0},
+        "resources": {"cpu_pct": 12.0, "load1": 0.5, "cores": 4, "mem_pct": 40.0, "mem_used_gb": 2.0,
+                      "mem_total_gb": 5.0, "disk_pct": 20.0, "disk_used_gb": 20.0, "disk_total_gb": 100.0},
+        "trend": [{"t": 1760000000000 + i * 3600000, "events": 100 + i * 10} for i in range(24)],
         "storage": {"disk_free": 10 * 1024**3, "disk_total": 100 * 1024**3, "days_left": 30.0, "avg_daily_total": 1024**3},
     }
 
@@ -43,6 +48,9 @@ class ReportsModule(unittest.TestCase):
             html = f.read()
         self.assertIn("Audit Log Tampering", html)
         self.assertIn("T1070.001", html)
+        self.assertIn("firewall-sophos-xg", html)          # event source distribution
+        self.assertIn("GREEN", html)                       # cluster health
+        self.assertIn("<svg", html)                        # trend chart
 
     def test_list_reports_sorted_newest_first(self):
         d = tempfile.mkdtemp()
@@ -73,7 +81,8 @@ class BuildReportData(unittest.TestCase):
         os.environ.update(OS_URL="http://127.0.0.1:9", DATA_DIR=tempfile.mkdtemp(), DASH_PASS="", BIND="127.0.0.1")
         import server
         self.s = importlib.reload(server)
-        self.s.data_for = lambda hours: {"kpi": {"events_24h": 42, "sev": {}}, "rules": [], "alerts": []}
+        self.s.data_for = lambda hours: {"kpi": {"events_24h": 42, "sev": {}}, "rules": [], "alerts": [], "types": [],
+                                        "cluster": {"status": "green"}, "host": {"cpu_pct": 1}}
         self.s.build_geo = lambda window: {"per_min": 1, "denied": 0, "total": 0, "window_s": window, "countries": []}
         self.s.api_storage = lambda: {"disk_free": 1, "disk_total": 2, "days_left": 3, "avg_daily_total": 4}
 
@@ -82,6 +91,9 @@ class BuildReportData(unittest.TestCase):
         self.assertEqual(d["kpi"]["events_24h"], 42)
         self.assertEqual(d["storage"]["days_left"], 3)
         self.assertEqual(d["host"], self.s.HOST_NAME)
+        self.assertEqual(d["cluster"]["status"], "green")
+        self.assertEqual(d["resources"]["cpu_pct"], 1)
+        self.assertEqual(d["trend"], [])   # fresh temp DATA_DIR, no history rows yet
 
     def test_out_of_range_hours_falls_back_to_24(self):
         d = self.s.build_report_data(99)

@@ -9,9 +9,13 @@ Report dict shape (all keys optional -- a missing section is just skipped):
   {"generated_at": iso, "range_h": int, "host": str,
    "kpi": {"events_24h", "alerts_24h", "sev": {"High","Medium","Low"}, "sources_online", "sources_total",
            "sources_stale": [name,...], "eps_5m", "lag_s"},
+   "trend": [{"t": epoch_ms, "events": int}, ...],   # hourly, oldest first
    "rules": [{"name","count","sev"}, ...],
    "alerts": [{"t","sev","name","source","ip","technique"}, ...],
+   "types": [{"name","count"}, ...],
    "geo": {"per_min","denied","total","window_s","countries": [{"country","cc","count","denied"}, ...]},
+   "cluster": {"status","nodes","active_pct","unassigned"},
+   "resources": {"cpu_pct","load1","cores","mem_pct","mem_used_gb","mem_total_gb","disk_pct","disk_used_gb","disk_total_gb"},
    "storage": {"disk_free","disk_total","days_left","avg_daily_total"}}
 """
 import html
@@ -55,6 +59,25 @@ def _fmt_dt(iso):
         return iso
 
 
+def _fmt_ms(ms):
+    return _fmt_dt(datetime.fromtimestamp(ms / 1000, tz=timezone.utc).isoformat())
+
+
+def _trend_svg(trend, w=860, h=110):
+    vals = [p["events"] for p in trend]
+    maxv = max(vals) or 1
+    n = len(trend)
+    bw = w / n
+    bars = []
+    for i, p in enumerate(trend):
+        bar_h = (p["events"] / maxv) * (h - 20)
+        bars.append('<rect x="%.1f" y="%.1f" width="%.1f" height="%.1f" fill="#2c7a9e"/>' %
+                    (i * bw + 0.5, h - 20 - bar_h, max(0.5, bw - 1), bar_h))
+    return ('<svg viewBox="0 0 %d %d" width="100%%" height="%d" style="display:block;background:#fafafa">'
+            % (w, h, h) + "".join(bars) +
+            '<line x1="0" y1="%d" x2="%d" y2="%d" stroke="#ccc"/></svg>' % (h - 20, w, h - 20))
+
+
 # --------------------------------------------------------------------------------------- HTML
 def render_html(data):
     e = html.escape
@@ -74,6 +97,11 @@ def render_html(data):
     if k.get("sources_stale"):
         rows.append("<p class='warn'>Silent sources (no data in 10 min): %s</p>" % e(", ".join(k["sources_stale"])))
 
+    trend = data.get("trend")
+    if trend:
+        rows.append("<h2>Hourly events</h2>" + _trend_svg(trend) +
+                    "<p class='caption'>%s &rarr; %s</p>" % (e(_fmt_ms(trend[0]["t"])), e(_fmt_ms(trend[-1]["t"]))))
+
     if data.get("rules"):
         rows.append("<h2>Top alert rules</h2><table><tr><th>Rule</th><th>Count</th><th>Severity</th></tr>")
         for r in data["rules"]:
@@ -90,6 +118,12 @@ def render_html(data):
                          e(a.get("source", "")), e(a.get("ip", "")), e(a.get("technique") or "–")))
         rows.append("</table>")
 
+    if data.get("types"):
+        rows.append("<h2>Event source distribution</h2><table><tr><th>Type</th><th>Events</th></tr>")
+        for t in data["types"]:
+            rows.append("<tr><td>%s</td><td>%s</td></tr>" % (e(t["name"]), t["count"]))
+        rows.append("</table>")
+
     geo = data.get("geo") or {}
     if geo.get("countries"):
         rows.append("<h2>Blocked inbound — top countries</h2>"
@@ -99,6 +133,22 @@ def render_html(data):
         for c in geo["countries"]:
             rows.append("<tr><td>%s</td><td>%s</td><td>%s</td></tr>" %
                         (e(c.get("country") or c.get("cc", "")), c.get("count", 0), c.get("denied", 0)))
+        rows.append("</table>")
+
+    cluster, res = data.get("cluster") or {}, data.get("resources") or {}
+    if cluster or res:
+        rows.append("<h2>OpenSearch &amp; host health</h2><table class='kv'>")
+        if cluster:
+            rows.append("<tr><td>OpenSearch status</td><td>%s &middot; %s node(s) &middot; %s%% shards active &middot; %s unassigned</td></tr>" %
+                        (e(str(cluster.get("status") or "–").upper()), cluster.get("nodes", "–"),
+                         ("%.0f" % cluster["active_pct"]) if cluster.get("active_pct") is not None else "–", cluster.get("unassigned", "–")))
+        if res:
+            rows.append("<tr><td>Host CPU</td><td>%.0f%% (load %.2f on %s cores)</td></tr>"
+                        "<tr><td>Host memory</td><td>%.0f%% (%.1f of %.1f GB)</td></tr>"
+                        "<tr><td>Host disk</td><td>%.0f%% (%.1f of %.1f GB)</td></tr>" %
+                        (res.get("cpu_pct", 0), res.get("load1", 0), res.get("cores", "–"),
+                         res.get("mem_pct", 0), res.get("mem_used_gb", 0), res.get("mem_total_gb", 0),
+                         res.get("disk_pct", 0), res.get("disk_used_gb", 0), res.get("disk_total_gb", 0)))
         rows.append("</table>")
 
     store = data.get("storage") or {}
@@ -121,13 +171,38 @@ table.kv td:first-child{color:#555;width:260px}
 th,td{border:1px solid #ddd;padding:6px 10px;text-align:left;font-size:13px}
 th{background:#f3f3f3}
 .sev-high,.sev-critical{color:#c0392b;font-weight:600} .sev-medium{color:#b8860b;font-weight:600} .sev-low{color:#2d6a4f}
-.warn{color:#b8860b} .foot{color:#999;font-size:11px;margin-top:40px;border-top:1px solid #eee;padding-top:10px}
+.warn{color:#b8860b} .caption{color:#888;font-size:11px;margin-top:-14px}
+.foot{color:#999;font-size:11px;margin-top:40px;border-top:1px solid #eee;padding-top:10px}
 </style></head><body>
 <h1>UTMStack Observatory — Security Report</h1>
 <div class="sub">%s &middot; generated %s</div>
 %s
 <div class="foot">Generated automatically from UTMStack's own OpenSearch data. Summary counts only — see the dashboard for detail.</div>
 </body></html>""" % (e(data.get("host") or ""), e(_fmt_dt(data.get("generated_at"))), "".join(rows))
+
+
+def _trend_chart(pdf, trend, width=180, height=28):
+    vals = [p["events"] for p in trend]
+    maxv = max(vals) or 1
+    x0, y0 = pdf.get_x(), pdf.get_y()
+    n = len(trend)
+    bw = width / n
+    pdf.set_fill_color(44, 122, 158)
+    for i, p in enumerate(trend):
+        bar_h = (p["events"] / maxv) * height
+        pdf.rect(x0 + i * bw, y0 + height - bar_h, max(0.3, bw - 0.3), bar_h, style="F")
+    pdf.set_draw_color(200, 200, 200)
+    pdf.line(x0, y0 + height, x0 + width, y0 + height)
+    pdf.set_font("helvetica", "", 7)
+    pdf.set_text_color(120, 120, 120)
+    pdf.set_xy(x0, y0 + height + 1)
+    pdf.cell(width / 2, 4, _fmt_ms(trend[0]["t"]))
+    pdf.set_xy(x0 + width / 2, y0 + height + 1)
+    pdf.cell(width / 2, 4, _fmt_ms(trend[-1]["t"]), align="R")
+    pdf.set_text_color(0, 0, 0)
+    pdf.set_fill_color(255, 255, 255)   # bar fill leaks into later tables' default cell fill otherwise
+    pdf.set_draw_color(0, 0, 0)
+    pdf.set_xy(x0, y0 + height + 7)
 
 
 # --------------------------------------------------------------------------------------- PDF
@@ -175,6 +250,11 @@ def render_pdf(data):
         pdf.multi_cell(0, 6, "Silent sources (no data in 10 min): " + ", ".join(k["sources_stale"]))
         pdf.set_text_color(0, 0, 0)
 
+    trend = data.get("trend")
+    if trend:
+        h2("Hourly events")
+        _trend_chart(pdf, trend)
+
     if data.get("rules"):
         h2("Top alert rules")
         with pdf.table(col_widths=(110, 30, 40), text_align="LEFT") as t:
@@ -193,6 +273,13 @@ def render_pdf(data):
                 r.cell(_fmt_dt(a.get("t"))[:16]); r.cell(a["sev"]); r.cell(a["name"][:40])
                 r.cell(a.get("source", "")[:20]); r.cell(a.get("ip", "")[:20]); r.cell((a.get("technique") or "-")[:30])
 
+    if data.get("types"):
+        h2("Event source distribution")
+        with pdf.table(col_widths=(100, 40), text_align="LEFT") as t:
+            r = t.row(); r.cell("Type"); r.cell("Events")
+            for ty in data["types"]:
+                r = t.row(); r.cell(ty["name"]); r.cell(str(ty["count"]))
+
     geo = data.get("geo") or {}
     if geo.get("countries"):
         h2("Blocked inbound - top countries")
@@ -202,6 +289,23 @@ def render_pdf(data):
             r = t.row(); r.cell("Country"); r.cell("Connections"); r.cell("Denied")
             for c in geo["countries"]:
                 r = t.row(); r.cell(c.get("country") or c.get("cc", "")); r.cell(str(c.get("count", 0))); r.cell(str(c.get("denied", 0)))
+
+    cluster, res = data.get("cluster") or {}, data.get("resources") or {}
+    if cluster or res:
+        h2("OpenSearch & host health")
+        kv_rows = []
+        if cluster:
+            kv_rows.append(("OpenSearch status", "%s | %s node(s) | %s%% shards active | %s unassigned" %
+                            (str(cluster.get("status") or "-").upper(), cluster.get("nodes", "-"),
+                             ("%.0f" % cluster["active_pct"]) if cluster.get("active_pct") is not None else "-",
+                             cluster.get("unassigned", "-"))))
+        if res:
+            kv_rows += [
+                ("Host CPU", "%.0f%% (load %.2f on %s cores)" % (res.get("cpu_pct", 0), res.get("load1", 0), res.get("cores", "-"))),
+                ("Host memory", "%.0f%% (%.1f of %.1f GB)" % (res.get("mem_pct", 0), res.get("mem_used_gb", 0), res.get("mem_total_gb", 0))),
+                ("Host disk", "%.0f%% (%.1f of %.1f GB)" % (res.get("disk_pct", 0), res.get("disk_used_gb", 0), res.get("disk_total_gb", 0))),
+            ]
+        kv_table(kv_rows)
 
     store = data.get("storage") or {}
     if store:

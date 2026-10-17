@@ -286,6 +286,8 @@ details.ev .kvt{margin:4px 0 8px}
 .mc-row .dbar{height:6px;background:var(--s3);position:relative}
 .mc-row .dbar i{position:absolute;left:0;top:0;bottom:0;background:var(--red)}
 .tk{display:grid;grid-template-columns:54px minmax(0,1fr);gap:6px;font-size:13px;padding:4px 2px;border-bottom:1px solid var(--border)}
+.tk[data-lat]{cursor:pointer}
+.tk[data-lat]:hover,.tk[data-lat]:focus-visible{background:var(--cyan-soft)}
 .tk .t{font-family:var(--mono);font-size:12px;color:var(--muted)}
 .tk .w{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .tk .ip{font-family:var(--mono);color:var(--red-ink)}
@@ -1097,7 +1099,7 @@ body.paused .mark-core,body.paused .tk.new,body.paused .live-dot{animation-play-
     $('#mapTicker').innerHTML = g.ticker.length ? g.ticker.slice(0,10).map(function(x){
       var key = x.t+x.ip, isNew = !seenTicks[key]; fresh[key] = 1;
       var where = [x.city, x.country].filter(Boolean).join(', ') || x.cc || '';
-      var geo = x.lat!=null && x.lon!=null ? ' data-lat="'+x.lat+'" data-lon="'+x.lon+'" data-ip="'+esc(x.ip||'')+'" data-sub="'+esc(where+' → '+x.site)+'"' : '';
+      var geo = x.lat!=null && x.lon!=null ? ' data-lat="'+x.lat+'" data-lon="'+x.lon+'" data-ip="'+esc(x.ip||'')+'" data-sub="'+esc(where+' → '+x.site)+'" tabindex="0" role="button" aria-label="Look up '+esc(x.ip||'')+'"' : '';
       return '<div class="tk'+(isNew && Object.keys(seenTicks).length ? ' new' : '')+'"'+geo+'><span class="t">'+hhmmss(new Date(x.t))+'</span>'+
         '<span class="w"><span class="ip">'+esc(x.ip)+'</span> '+flag(x.cc)+' '+esc(where)+' → '+esc(x.site)+(x.port?' :'+esc(x.port):'')+'</span></div>';
     }).join('') : '<div class="map-note">No blocked inbound connections in the last '+winLbl+'.</div>';
@@ -1167,6 +1169,12 @@ body.paused .mark-core,body.paused .tk.new,body.paused .live-dot{animation-play-
   $('#alertBody').addEventListener('mouseout', function(e){ var tr = e.target.closest('tr[data-lat]'); if(tr && !tr.contains(e.relatedTarget)) pinOff(); });
   $('#mapTicker').addEventListener('mouseover', function(e){ var tk = e.target.closest('.tk[data-lat]'); if(tk) rowPin(tk); });
   $('#mapTicker').addEventListener('mouseout', function(e){ var tk = e.target.closest('.tk[data-lat]'); if(tk && !tk.contains(e.relatedTarget)) pinOff(); });
+  $('#mapTicker').addEventListener('click', function(e){
+    var tk = e.target.closest('.tk[data-lat]'); if(tk) openDig({name:'ip', ip:tk.dataset.ip, sub:tk.dataset.sub}, true);
+  });
+  $('#mapTicker').addEventListener('keydown', function(e){
+    if((e.key==='Enter'||e.key===' ') && e.target.matches('.tk[data-lat]')){ e.preventDefault(); e.target.click(); }
+  });
 
   /* ---------- wall display mode ---------- */
   var wallOn = false, wallTimer = null, wallIdx = 0, preWallScreen = null;
@@ -1823,12 +1831,28 @@ body.paused .mark-core,body.paused .tk.new,body.paused .live-dot{animation-play-
           kvTable(e, ['raw'])+(e.raw?'<pre>'+esc(e.raw)+'</pre>':'')+'</details>';
       }).join('') || '<div class="ai-note">No event data stored on this alert.</div>';
       digBody.innerHTML = html;
-      loadReputation(a, live);
-      loadWhois(a, live);
+      loadReputation(ips, live);
+      loadWhois(ips, live);
     }).catch(function(e){ if(live()) failed(e); });
   };
 
-  /* ---- live reputation (AbuseIPDB / VirusTotal) for the IPs on an alert ---- */
+  /* ---- single blocked-inbound IP (from the Live Firewall Map ticker, not tied to an alert) ---- */
+  VIEWS.ip = function(v, live){
+    var ip = (v.ip||'').trim();
+    setHead('Blocked connection', ip);
+    if(!IP_RE.test(ip)){ failed({message: 'not a valid IP address'}); return; }
+    var ips = [{ip: ip, role: 'blocked inbound'}];
+    var html = '<div class="badges"><span class="tag">Blocked inbound</span>'+(v.sub?' <span class="tag">'+esc(v.sub)+'</span>':'')+'</div>';
+    html += '<h3 class="tl-title">Reputation <span class="panel-meta">AbuseIPDB &amp; VirusTotal · cached 24 h</span></h3>'+
+      '<div class="note-card whois" id="rep0"><b>'+esc(ip)+'</b> <span class="tag">blocked inbound</span><br>Looking up…</div>'+
+      '<h3 class="tl-title">WHOIS <span class="panel-meta">RDAP via rdap.org · public IPs only · cached 24 h</span></h3>'+
+      '<div class="note-card whois" id="whois0"><b>'+esc(ip)+'</b> <span class="tag">blocked inbound</span><br>Looking up…</div>';
+    digBody.innerHTML = html;
+    loadReputation(ips, live);
+    loadWhois(ips, live);
+  };
+
+  /* ---- live reputation (AbuseIPDB / VirusTotal) for a list of {ip, role} ---- */
   function repCard(x, d){
     var head = '<b>'+esc(x.ip)+'</b> <span class="tag">'+esc(x.role)+'</span>';
     if(d.error) return head+'<br>'+esc(d.error);
@@ -1854,8 +1878,8 @@ body.paused .mark-core,body.paused .tk.new,body.paused .live-dot{animation-play-
     }
     return head+parts.join('');
   }
-  function loadReputation(a, live){
-    alertIps(a).reduce(function(chain, x, i){
+  function loadReputation(ips, live){
+    ips.reduce(function(chain, x, i){
       return chain.then(function(){
         var box = $('#rep'+i); if(!box || !live()) return;
         return api('/api/reputation', {ip:x.ip}).then(function(d){ if(live() && $('#rep'+i)) $('#rep'+i).innerHTML = repCard(x, d); })
@@ -1889,8 +1913,8 @@ body.paused .mark-core,body.paused .tk.new,body.paused .live-dot{animation-play-
     return head+'<table class="cmp kvt"><tbody>'+rows.map(function(r){
       return '<tr><td>'+esc(r[0])+'</td><td class="wrap" style="white-space:pre-line">'+esc(r[1])+'</td></tr>'; }).join('')+'</tbody></table>';
   }
-  function loadWhois(a, live){
-    alertIps(a).reduce(function(chain, x, i){
+  function loadWhois(ips, live){
+    ips.reduce(function(chain, x, i){
       return chain.then(function(){
         var box = $('#whois'+i); if(!box || !live()) return;
         return api('/api/whois', {ip:x.ip}).then(function(d){ if(live() && $('#whois'+i)) $('#whois'+i).innerHTML = whoisCard(x, d); })

@@ -12,7 +12,7 @@ import urllib.error, urllib.request
 from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-VERSION = "1.3.0"
+VERSION = "1.3.1"
 HERE = os.path.dirname(os.path.abspath(__file__))
 if HERE not in sys.path:                          # the container runs "python3 -I", which leaves this folder off sys.path
     sys.path.insert(0, HERE)
@@ -519,6 +519,15 @@ def api_storage():
             "note": "Sizes are primary shards in OpenSearch; index days are UTC. A day is final once its index is closed out."}
 
 
+def report_trend(hours):
+    """Hourly event counts for the last `hours` from the same local history the Trends drawer reads --
+    data_for()'s own "minutes" series only ever covers the last 60 minutes, too short for a 24 h report."""
+    cutoff = int(time.time() * 1000) - hours * HOUR_MS
+    with _dblock:
+        rows = db().execute("SELECT hour, events FROM hourly WHERE hour >= ? ORDER BY hour", (cutoff,)).fetchall()
+    return [{"t": r[0], "events": r[1] or 0} for r in rows]
+
+
 def build_report_data(hours=24):
     """Everything reports.render_html()/render_pdf() need, reusing the same aggregations the dashboard itself uses."""
     hours = hours if hours in RANGES_H else 24
@@ -527,7 +536,8 @@ def build_report_data(hours=24):
     store = api_storage()
     return {
         "generated_at": datetime.now(timezone.utc).isoformat(), "range_h": hours, "host": HOST_NAME,
-        "kpi": d["kpi"], "rules": d["rules"], "alerts": d["alerts"],
+        "kpi": d["kpi"], "rules": d["rules"], "alerts": d["alerts"], "types": d["types"],
+        "cluster": d["cluster"], "resources": d["host"], "trend": report_trend(hours),
         "geo": {"per_min": geo["per_min"], "denied": geo["denied"], "total": geo["total"],
                 "window_s": geo["window_s"], "countries": geo["countries"][:10]},
         "storage": {"disk_free": store["disk_free"], "disk_total": store["disk_total"],

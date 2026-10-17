@@ -1,5 +1,30 @@
 # Release notes
 
+## 1.2.6 — 2026-10-17
+
+**For users**
+- New **Settings** panel (gear icon, top right of the header): change the dashboard login, the AbuseIPDB and
+  VirusTotal keys, the support contact, the map's home location and site pins, and the AI-traffic hosts —
+  all without SSH access to the server. Changes apply immediately; changing the password signs you out and
+  reloads the page so you can log back in with the new one. A link in the panel opens the existing layout
+  editor (widgets/screens/wall rotation already had their own editor — this just makes it easier to find).
+- `install.sh` also gained `--abuseipdb-key` / `--virustotal-key` for setting those keys at install time, as
+  an alternative to the new panel.
+
+**Technical**
+- New `app/settings_store.py`: flat JSON store at `/data/settings.json` (same volume as the layout/history),
+  atomic writes, 2 s read cache (this is now on the hot path of every authenticated request). Secrets
+  (`dash_pass`, the two API keys) are written but never read back to a client — only a `*_configured` boolean.
+- `DASH_USER`/`DASH_PASS`/`AI_HOSTS`/`HOME_LOCATION`/`SITE_LOCATIONS`/`SUPPORT_CONTACT`/the two API keys are
+  now resolved per-request via `current_*()` accessors (settings-store override, env/install-time default as
+  fallback) instead of being frozen at process start. `BIND`'s auto-detect and the no-auth startup guard now
+  also check the settings store, so a password set only through the panel still binds correctly after a
+  redeploy.
+- New `GET`/`PUT /api/settings`, same auth/CSRF handling as the existing layout save; validation reuses
+  `parse_loc`/`parse_sites`/`parse_support`, and rejects clearing or shortening the dashboard password below
+  8 characters. Tests: 82 Python + 13 JS, including an end-to-end live-password-change test (old password
+  401s, new one 200s, no restart).
+
 ## 1.2.5 — 2026-10-17
 
 **For users**

@@ -12,6 +12,7 @@
 #          --tls | --tls-cert F --tls-key F   --tz ZONE   --stack NAME   --import-history FILE
 #          --sites "FirewallName=lat,lon,City;1.2.3.4=lat,lon"   --home "lat,lon,City"   (live map)
 #          --support "Name|email|phone|url"   (shown when the logo is clicked)
+#          --abuseipdb-key KEY   --virustotal-key KEY   (live IP reputation on alert detail)
 set -euo pipefail
 
 SRC="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -31,7 +32,7 @@ case "${1:-}" in install|uninstall|status|logs|password) CMD="$1"; shift;; esac
 
 # defaults, overridden by the saved config from a previous install, then by flags
 PORT=8765; DASH_USER=admin; AI_HOSTS=""; TLS=0; TZ_NAME=""; STACK=""; SITES=""; HOME_LOC=""; SUPPORT=""
-TLS_CERT_SRC=""; TLS_KEY_SRC=""; NEW_PASS=""; IMPORT=""; PURGE=0
+TLS_CERT_SRC=""; TLS_KEY_SRC=""; NEW_PASS=""; IMPORT=""; PURGE=0; ABUSEIPDB_KEY=""; VIRUSTOTAL_KEY=""
 # shellcheck disable=SC1090
 [ -f "$CONF" ] && . "$CONF"
 [ "$CMD" = password ] && { NEW_PASS="${1:-}"; [ $# -gt 0 ] && shift; }
@@ -44,7 +45,8 @@ while [ $# -gt 0 ]; do
     --stack) STACK="$2"; shift 2;;          --import-history) IMPORT="$2"; shift 2;;
     --sites) SITES="$2"; shift 2;;          --home) HOME_LOC="$2"; shift 2;;
     --support) SUPPORT="$2"; shift 2;;
-    --purge) PURGE=1; shift;;               -h|--help) sed -n '2,15p' "$0"; exit 0;;
+    --abuseipdb-key) ABUSEIPDB_KEY="$2"; shift 2;;  --virustotal-key) VIRUSTOTAL_KEY="$2"; shift 2;;
+    --purge) PURGE=1; shift;;               -h|--help) sed -n '2,16p' "$0"; exit 0;;
     *) die "unknown option: $1";;
   esac
 done
@@ -177,6 +179,14 @@ if [ "$TLS" = 1 ]; then
   SECRETS+=(--secret "source=observatory_tls_cert_$TS,target=tls_cert,mode=0444" --secret "source=observatory_tls_key_$TS,target=tls_key,mode=0444")
   ENVS+=(--env TLS_CERT=/run/secrets/tls_cert --env TLS_KEY=/run/secrets/tls_key)
 fi
+if [ -n "$ABUSEIPDB_KEY" ]; then
+  mksecret observatory_abuseipdb_key "$ABUSEIPDB_KEY"; SECRETS+=(--secret "source=observatory_abuseipdb_key_$TS,target=abuseipdb_key,mode=0444")
+  ENVS+=(--env "ABUSEIPDB_KEY_FILE=/run/secrets/abuseipdb_key")
+fi
+if [ -n "$VIRUSTOTAL_KEY" ]; then
+  mksecret observatory_virustotal_key "$VIRUSTOTAL_KEY"; SECRETS+=(--secret "source=observatory_virustotal_key_$TS,target=virustotal_key,mode=0444")
+  ENVS+=(--env "VIRUSTOTAL_KEY_FILE=/run/secrets/virustotal_key")
+fi
 MOUNTS=(--mount "type=volume,source=$VOLUME,target=/data" --mount "type=tmpfs,destination=/tmp")
 [ -n "$HOSTFS" ] && { MOUNTS+=(--mount "type=bind,source=$HOSTFS,target=/hostfs,readonly"); ENVS+=(--env DISK_PATH=/hostfs); }
 
@@ -209,7 +219,8 @@ sleep 6
 auth="$(curl -sk -m 15 -o /dev/null -w '%{http_code}' -u "$DASH_USER:$DASH_PASS" "$sch://127.0.0.1:$PORT/api/data" || true)"
 [ "$auth" = 200 ] || warn "login check returned HTTP $auth"
 
-{ printf 'PORT=%q\nDASH_USER=%q\nAI_HOSTS=%q\nTLS=%q\nTZ_NAME=%q\nSTACK=%q\nSITES=%q\nHOME_LOC=%q\nSUPPORT=%q\n' "$PORT" "$DASH_USER" "$AI_HOSTS" "$TLS" "$TZ_NAME" "$STACK" "$SITES" "$HOME_LOC" "$SUPPORT"
+{ printf 'PORT=%q\nDASH_USER=%q\nAI_HOSTS=%q\nTLS=%q\nTZ_NAME=%q\nSTACK=%q\nSITES=%q\nHOME_LOC=%q\nSUPPORT=%q\nABUSEIPDB_KEY=%q\nVIRUSTOTAL_KEY=%q\n' \
+    "$PORT" "$DASH_USER" "$AI_HOSTS" "$TLS" "$TZ_NAME" "$STACK" "$SITES" "$HOME_LOC" "$SUPPORT" "$ABUSEIPDB_KEY" "$VIRUSTOTAL_KEY"
   [ -n "$TLS_CERT_SRC" ] && printf 'TLS_CERT_SRC=%q\nTLS_KEY_SRC=%q\n' "$TLS_CERT_SRC" "$TLS_KEY_SRC"; } > "$CONF"; chmod 600 "$CONF"
 
 echo

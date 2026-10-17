@@ -1,5 +1,21 @@
 # Release notes
 
+## 1.1.2 — 2026-10-17
+
+**For users**
+- **Support info.** Click the animated logo at the top left to open a Support panel: Cyber Security Canada's contact
+  details (email and website), the dashboard version and install date, and a quick health summary (OpenSearch status,
+  how fresh the data is, data sources online, whether the connection is encrypted).
+- **Copy diagnostics** puts that summary on your clipboard to paste into a support email. It contains no passwords and
+  no client names. On the wall screen the panel shows only the contact details and version.
+
+**Technical**
+- New endpoint `GET /api/support[?anon=1]`.
+- New install option `--support "Name|email|phone|url"` (saved in `config.env`, passed as `SUPPORT_CONTACT`); default is
+  Cyber Security Canada, info@cybersecuritycanada.com, https://cybersecuritycanada.com. The installer now also records
+  `INSTALLED_AT`.
+- 4 new tests (15 total).
+
 ## 1.1.1 — 2026-10-17
 
 **For users**

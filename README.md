@@ -44,6 +44,7 @@ Common options:
 | `--import-history FILE` | seed `history.db` from an earlier install |
 | `--sites "Name=lat,lon,City;1.2.3.4=lat,lon"` | pin firewalls the map cannot place on its own (by device name or WAN IP) |
 | `--home "lat,lon,City"` | where unplaceable firewalls are drawn (default Toronto) |
+| `--support "Name\|email\|phone\|url"` | contact shown when the logo is clicked (default Cyber Security Canada, info@cybersecuritycanada.com) |
 
 Other commands: `sudo ./install.sh status | logs | password [NEW] | uninstall [--purge]`.
 `uninstall` keeps your stored history; `--purge` deletes it, the config and the image.

@@ -11,6 +11,7 @@
 # Options: --port N (8765)  --user NAME (admin)  --password PW  --ai-hosts "name=ip,name=ip"
 #          --tls | --tls-cert F --tls-key F   --tz ZONE   --stack NAME   --import-history FILE
 #          --sites "FirewallName=lat,lon,City;1.2.3.4=lat,lon"   --home "lat,lon,City"   (live map)
+#          --support "Name|email|phone|url"   (shown when the logo is clicked)
 set -euo pipefail
 
 SRC="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -29,7 +30,7 @@ CMD=install
 case "${1:-}" in install|uninstall|status|logs|password) CMD="$1"; shift;; esac
 
 # defaults, overridden by the saved config from a previous install, then by flags
-PORT=8765; DASH_USER=admin; AI_HOSTS=""; TLS=0; TZ_NAME=""; STACK=""; SITES=""; HOME_LOC=""
+PORT=8765; DASH_USER=admin; AI_HOSTS=""; TLS=0; TZ_NAME=""; STACK=""; SITES=""; HOME_LOC=""; SUPPORT=""
 TLS_CERT_SRC=""; TLS_KEY_SRC=""; NEW_PASS=""; IMPORT=""; PURGE=0
 # shellcheck disable=SC1090
 [ -f "$CONF" ] && . "$CONF"
@@ -42,7 +43,8 @@ while [ $# -gt 0 ]; do
     --tls-key) TLS=1; TLS_KEY_SRC="$2"; shift 2;;  --tz) TZ_NAME="$2"; shift 2;;
     --stack) STACK="$2"; shift 2;;          --import-history) IMPORT="$2"; shift 2;;
     --sites) SITES="$2"; shift 2;;          --home) HOME_LOC="$2"; shift 2;;
-    --purge) PURGE=1; shift;;               -h|--help) sed -n '2,14p' "$0"; exit 0;;
+    --support) SUPPORT="$2"; shift 2;;
+    --purge) PURGE=1; shift;;               -h|--help) sed -n '2,15p' "$0"; exit 0;;
     *) die "unknown option: $1";;
   esac
 done
@@ -164,7 +166,8 @@ mkfilesecret() { docker secret create --label "$LABEL=1" "$1_$TS" "$2" >/dev/nul
 SECRETS=(); mksecret observatory_dash_pass "$DASH_PASS"; SECRETS+=(--secret "source=observatory_dash_pass_$TS,target=dash_pass,mode=0444")
 ENVS=(--env "OS_URL=$SCHEME://$ES_HOST:$ES_PORT" --env "DASH_USER=$DASH_USER" --env "DASH_PASS_FILE=/run/secrets/dash_pass"
       --env "TZ=$TZ_NAME" --env "HOST_NAME=$(hostname)" --env "AI_HOSTS=$AI_HOSTS"
-      --env "SITE_LOCATIONS=$SITES" --env "HOME_LOCATION=$HOME_LOC")
+      --env "SITE_LOCATIONS=$SITES" --env "HOME_LOCATION=$HOME_LOC"
+      --env "SUPPORT_CONTACT=$SUPPORT" --env "INSTALLED_AT=$(date -u +%Y-%m-%dT%H:%M:%SZ)")
 if [ -n "$ES_USER" ]; then
   mksecret observatory_os_pass "$ES_PASS"; SECRETS+=(--secret "source=observatory_os_pass_$TS,target=os_pass,mode=0444")
   ENVS+=(--env "OS_USER=$ES_USER" --env "OS_PASS_FILE=/run/secrets/os_pass")
@@ -206,7 +209,7 @@ sleep 6
 auth="$(curl -sk -m 15 -o /dev/null -w '%{http_code}' -u "$DASH_USER:$DASH_PASS" "$sch://127.0.0.1:$PORT/api/data" || true)"
 [ "$auth" = 200 ] || warn "login check returned HTTP $auth"
 
-{ printf 'PORT=%q\nDASH_USER=%q\nAI_HOSTS=%q\nTLS=%q\nTZ_NAME=%q\nSTACK=%q\nSITES=%q\nHOME_LOC=%q\n' "$PORT" "$DASH_USER" "$AI_HOSTS" "$TLS" "$TZ_NAME" "$STACK" "$SITES" "$HOME_LOC"
+{ printf 'PORT=%q\nDASH_USER=%q\nAI_HOSTS=%q\nTLS=%q\nTZ_NAME=%q\nSTACK=%q\nSITES=%q\nHOME_LOC=%q\nSUPPORT=%q\n' "$PORT" "$DASH_USER" "$AI_HOSTS" "$TLS" "$TZ_NAME" "$STACK" "$SITES" "$HOME_LOC" "$SUPPORT"
   [ -n "$TLS_CERT_SRC" ] && printf 'TLS_CERT_SRC=%q\nTLS_KEY_SRC=%q\n' "$TLS_CERT_SRC" "$TLS_KEY_SRC"; } > "$CONF"; chmod 600 "$CONF"
 
 echo

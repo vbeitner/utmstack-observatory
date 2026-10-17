@@ -12,7 +12,7 @@ import urllib.error, urllib.request
 from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-VERSION = "1.1.1"
+VERSION = "1.1.2"
 HERE = os.path.dirname(os.path.abspath(__file__))
 
 
@@ -1107,6 +1107,38 @@ def api_geo(window=60, anon=False):
     return dict(data, ticker=[dict(x, site=names.get(x["site"], x["site"])) for x in data["ticker"]])
 
 
+# ---------------------------------------------------------------- support info (logo click)
+DEFAULT_SUPPORT = "Cyber Security Canada|info@cybersecuritycanada.com||https://cybersecuritycanada.com"
+STARTED_AT = datetime.now(timezone.utc).isoformat()
+
+
+def parse_support(text):
+    """SUPPORT_CONTACT='Name|email|phone|url' -> dict; empty parts are dropped."""
+    parts = [x.strip() for x in (text or DEFAULT_SUPPORT).split("|")] + ["", "", "", ""]
+    name, email, phone, url = parts[:4]
+    if url and not re.match(r"^https?://", url):
+        url = "https://" + url
+    return {k: v for k, v in (("name", name), ("email", email), ("phone", phone), ("url", url)) if v}
+
+
+SUPPORT = parse_support(env("SUPPORT_CONTACT"))
+
+
+def api_support(anon=False):
+    """Contact + health summary for the support panel. Never includes secrets or client names."""
+    out = {"contact": SUPPORT, "version": VERSION, "installed": env("INSTALLED_AT") or None}
+    if anon:                                     # wall screen: contact and version only
+        return out
+    with _lock:
+        d = dict(_state["data"])
+    k = d.get("kpi") or {}
+    out.update(host=HOST_NAME, started=STARTED_AT, transport=TRANSPORT,
+               opensearch=(d.get("cluster") or {}).get("status"),
+               data_age_s=k.get("lag_s"), sources_online=k.get("sources_online"), sources_total=k.get("sources_total"),
+               error=d.get("error"), tls=bool(TLS_CERT and TLS_KEY))
+    return out
+
+
 _range_cache = {}
 _range_lock = threading.Lock()
 
@@ -1197,6 +1229,7 @@ class Handler(BaseHTTPRequestHandler):
             "/api/cluster": lambda: api_cluster(),
             "/api/storage": lambda: api_storage(),
             "/api/whois": lambda: api_whois(p.get("ip", "")[:64]),
+            "/api/support": lambda: api_support(p.get("anon") == "1"),
             "/api/geo": lambda: api_geo(int(p["window"]) if p.get("window", "").isdigit() else 60,
                                         p.get("anon") == "1"),
         }

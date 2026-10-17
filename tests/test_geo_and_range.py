@@ -176,6 +176,30 @@ class RangePicker(unittest.TestCase):
 
 
 
+
+class SupportInfo(unittest.TestCase):
+    def test_default_contact_is_cyber_security_canada(self):
+        s = load_server(SUPPORT_CONTACT="")
+        self.assertEqual(s.SUPPORT, {"name": "Cyber Security Canada", "email": "info@cybersecuritycanada.com",
+                                     "url": "https://cybersecuritycanada.com"})
+
+    def test_parse_support_fills_scheme_and_drops_blanks(self):
+        s = load_server()
+        self.assertEqual(s.parse_support("Acme| help@acme.test |+1 613 555 0100|acme.test"),
+                         {"name": "Acme", "email": "help@acme.test", "phone": "+1 613 555 0100", "url": "https://acme.test"})
+
+    def test_wall_version_has_contact_and_version_only(self):
+        s = load_server()
+        self.assertEqual(set(s.api_support(anon=True)), {"contact", "version", "installed"})
+
+    def test_full_version_never_contains_secrets(self):
+        s = load_server(DASH_PASS="dash-secret-123", OS_PASS="os-secret-456")
+        s._state["data"] = {"kpi": {"lag_s": 1.5, "sources_online": 20, "sources_total": 22}, "cluster": {"status": "yellow"}}
+        out = json.dumps(s.api_support())
+        self.assertNotIn("dash-secret-123", out)
+        self.assertNotIn("os-secret-456", out)
+        self.assertIn('"opensearch": "yellow"', out)
+
 class Packaging(unittest.TestCase):
     def test_version_file_matches_server(self):
         s = load_server()

@@ -1843,6 +1843,9 @@ body.editing .edit-bar{display:flex}
           '<code>{"acknowledged":true}</code> means it worked. They remove the replica copies a one-node cluster can never place and stop new daily '+
           'indices from asking for one. No data is deleted.</div>'+
           d.fix.steps.map(function(st, i){ return '<div class="ai-sec">'+(i+1)+' · '+esc(st.title.toUpperCase())+'</div><pre class="cmd">'+esc(st.cmd)+'</pre>'; }).join('');
+        if(d.fix.manual && d.fix.manual.length)
+          html += '<div class="note-card warn">Left out of the commands for safety, because their names contain unusual characters: '+
+            d.fix.manual.map(esc).join(', ')+'. Check these indices by hand before changing them.</div>';
       }
       digBody.innerHTML = html;
     }).catch(function(e){ if(live()) failed(e); });

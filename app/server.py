@@ -892,10 +892,17 @@ def api_cluster():
             notes.append({"level": "warn", "title": "%d replica shards cannot be placed" % len(un), "text": "See the allocation decider below; with several nodes this usually means disk watermarks, allocation filters or too few nodes."})
     fix = None
     if un and not un_p and single:
-        pats = [f["family"] + ("" if f["family"] in ALL_INDEX_FAMILIES else "-*") for f in fam_rows]
+        names = {}
+        for x in un:
+            names.setdefault(_family(x["index"]), set()).add(x["index"])
+        safe = [f["family"] for f in fam_rows if SAFE_INDEX.fullmatch(f["family"])]
+        # A family whose only index is the family name itself (no date) is matched exactly; daily series get -*
+        pats = [fam if names.get(fam, set()) <= {fam} else fam + "-*" for fam in safe]
         system = [x for x in pats if x.startswith(".") or x.startswith("security-auditlog")]
         data = [x for x in pats if x not in system]
-        fix = {"patterns": pats, "steps": []}
+        series = [x for x in pats if x.endswith("-*")]
+        fix = {"patterns": pats, "steps": [],
+               "manual": [f["family"] for f in fam_rows if not SAFE_INDEX.fullmatch(f["family"])]}
         if data:
             fix["steps"].append({"title": "Remove replicas from the existing data indices",
                                  "cmd": opensearch_put_cmd("/%s/_settings" % ",".join(data), '{"index":{"number_of_replicas":0}}')})
@@ -904,10 +911,13 @@ def api_cluster():
                                           "plugin may refuse some of these, which does not affect step 1",
                                  "cmd": opensearch_put_cmd("/%s/_settings?expand_wildcards=all" % ",".join(system),
                                                            '{"index":{"number_of_replicas":0}}')})
-        fix["steps"].append({"title": "Stop new indices getting a replica",
-                             "cmd": opensearch_put_cmd("/_index_template/single-node-no-replicas",
-                                                       '{"index_patterns":[%s],"priority":10,"template":{"settings":{"number_of_replicas":0}}}'
-                                                       % ",".join('"%s"' % x for x in pats if x not in ALL_INDEX_FAMILIES))})
+        if series:
+            # Legacy template with order 0: it only applies when no composable template matches, so if UTMStack's own
+            # (composable) template is ever fixed to match its indices, UTMStack's settings and mappings win.
+            fix["steps"].append({"title": "Stop new daily indices getting a replica",
+                                 "cmd": opensearch_put_cmd("/_template/single-node-no-replicas",
+                                                           '{"index_patterns":[%s],"order":0,"settings":{"number_of_replicas":0}}'
+                                                           % ",".join('"%s"' % x for x in series))})
     return {"status": h["status"], "nodes": h.get("number_of_data_nodes"), "active_pct": h.get("active_shards_percent_as_number"),
             "active": h.get("active_shards"), "primaries": h.get("active_primary_shards"), "unassigned": len(un), "unassigned_primaries": len(un_p),
             "reasons": reasons, "families": fam_rows, "decider": decider,
@@ -915,7 +925,7 @@ def api_cluster():
             "notes": notes, "fix": fix}
 
 
-ALL_INDEX_FAMILIES = (".opendistro-ism-config", ".opendistro-job-scheduler-lock")   # single indices, not daily series
+SAFE_INDEX = re.compile(r"[a-z0-9._-]+")      # index names come from OpenSearch; only these ever reach a shell command
 STACK = env("STACK_NAME", "utmstack")
 
 

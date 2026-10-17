@@ -1,0 +1,4 @@
+history.db
+*.md
+.git
+__pycache__

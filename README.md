@@ -1,0 +1,100 @@
+# UTMStack Observatory
+
+A read-only operations dashboard for a UTMStack v11 SIEM. It reads UTMStack's own OpenSearch and shows:
+
+- live event and alert trends, data-source health, event mix, top alert rules
+- click-through drill-downs: sources and who produces the most events, a filterable alert list, alert detail with **WHOIS** for every IP, and an **ingest-lag analysis** that tells you which feeds are late and why
+- **30 days of history** with daily and weekly comparisons, kept in a small local database because OpenSearch only retains about a day of logs
+- **storage tracking**: size of the alert and log indices per day, bytes per alert, and days of disk left
+- optional **AI Traffic** tab: bytes in/out of chosen servers, from Sophos XG firewall logs
+
+Python standard library only. Runs as one container (a Docker Swarm service) next to UTMStack.
+
+## Requirements
+
+- A UTMStack v11 server (Docker Swarm stack, normally `utmstack`). Run the installer on the Swarm manager node.
+- Docker, `curl`, root (or sudo). Internet access to pull `python:3.12-slim` the first time (and for WHOIS lookups, see below).
+
+## Install
+
+```bash
+tar xzf utmstack-observatory-1.0.0.tar.gz
+cd utmstack-observatory
+sudo ./install.sh
+```
+
+The installer finds the stack, reads the OpenSearch credentials UTMStack already uses, checks they work,
+builds the image, starts the service, and prints the URL and a generated login. Re-running it upgrades in place and
+keeps your password, settings and history.
+
+Common options:
+
+| Option | Meaning |
+|---|---|
+| `--port 8765` | port to publish (default 8765) |
+| `--tls` | HTTPS with a generated self-signed certificate (or `--tls-cert F --tls-key F` for your own) |
+| `--ai-hosts "gx10=10.0.2.34,web=10.0.2.17"` | enable the AI Traffic tab for these hosts (needs Sophos XG logs) |
+| `--user NAME` / `--password PW` | dashboard login (default user `admin`, random password) |
+| `--tz America/New_York` | time zone for day boundaries (default: the host's) |
+| `--stack NAME` | UTMStack stack name if it is not auto-detected |
+| `--import-history FILE` | seed `history.db` from an earlier install |
+
+Other commands: `sudo ./install.sh status | logs | password [NEW] | uninstall [--purge]`.
+`uninstall` keeps your stored history; `--purge` deletes it, the config and the image.
+
+## Security
+
+- **Login required.** HTTP Basic auth. The password is in `/etc/utmstack-observatory/admin.pass` (root only) and is passed to the
+  container as a Docker secret. Change it with `sudo ./install.sh password`.
+- **Plain HTTP by default**, so the login crosses the network unencrypted. Use `--tls`, or only reach it over a VPN / trusted network.
+- **Swarm publishes the port on every interface.** Restrict it with your firewall. Example allowing only Tailscale and localhost:
+  `iptables -I DOCKER-USER -p tcp --dport 8765 ! -s 100.64.0.0/10 -j DROP` (adapt, and persist it your usual way).
+- The container is read-only, drops all capabilities, runs as an unprivileged user, and has no Docker socket. It only *reads* OpenSearch.
+- It connects to OpenSearch without verifying its certificate (UTMStack uses an internal self-signed one on a private network).
+- **WHOIS** (alert detail) sends the looked-up public IP to `rdap.org`, which forwards to the regional registry. Private addresses are never sent. Results are cached for 24 hours.
+- The history database stores counts only, not raw events.
+
+## What is stored where
+
+| What | Where |
+|---|---|
+| 30-day hourly history + daily storage sizes | Docker volume `utmstack-observatory-data` (`/data/history.db`) |
+| Install settings | `/etc/utmstack-observatory/config.env` |
+| Dashboard password | `/etc/utmstack-observatory/admin.pass` |
+
+History starts when the dashboard is first installed. On a first run it also backfills event counts from UTMStack's ingest
+statistics (`v11-statistics-*`) for as far back as that index goes. Alerts and AI traffic cannot be backfilled.
+
+## Configuration (environment variables)
+
+The installer sets these; you only need them to run `app/server.py` by hand.
+
+| Variable | Default | |
+|---|---|---|
+| `OS_URL` | *(none)* | OpenSearch URL, e.g. `https://node1:9200`. Empty = bare-metal mode using `sudo docker exec` |
+| `OS_USER`, `OS_PASS` / `OS_PASS_FILE` | | OpenSearch credentials (omit if security is off) |
+| `DASH_USER`, `DASH_PASS` / `DASH_PASS_FILE` | `admin` | dashboard login. Without a password it only listens on 127.0.0.1 |
+| `PORT`, `BIND` | `8765`, `0.0.0.0` | |
+| `TLS_CERT`, `TLS_KEY` | | enable HTTPS |
+| `AI_HOSTS` | *(off)* | `name=ip,name=ip` |
+| `DATA_DIR` | app dir | where `history.db` lives |
+| `DISK_PATH` | `/utmstack` | path on the filesystem to report free space for |
+| `HOST_NAME`, `TZ` | | shown in the Resource panel / used for day boundaries |
+
+## Troubleshooting
+
+**Installer says OpenSearch rejects the credentials (HTTP 401).** UTMStack itself is broken, not the dashboard: the backend
+uses the same credentials and will be crash-looping (`docker service ls` shows `backend 0/1`, the web UI returns 502).
+It happens when OpenSearch's stored `admin` password no longer matches the one in the backend's environment. Fix that first
+(reset the `admin` hash in OpenSearch's security index to the backend's password with `securityadmin.sh`), then re-run the installer.
+
+**Trends shows "n/a" or "partial".** Comparisons only appear when both time windows have at least 90% of their hours of data.
+Daily comparisons fill in after about a day, weekly after about two weeks.
+
+**Ingest lag shows ~1 s but feeds are late.** The headline is the age of the newest event. Click the card for the per-source
+delay (device timestamp to stored time). Firewalls often batch logs; Microsoft 365 is polled, so minutes of delay are normal.
+
+**AI Traffic is empty or understated.** It uses Sophos XG firewall logs, so it only sees traffic that crosses the firewall,
+not traffic between machines on the same LAN.
+
+**Logs:** `sudo ./install.sh logs`. **Health:** `sudo ./install.sh status`.

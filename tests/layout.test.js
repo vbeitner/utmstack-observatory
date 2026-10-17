@@ -86,3 +86,19 @@ test('moving a widget down onto the one below swaps them (keyboard ArrowDown is 
   assert.equal(rules.y, 4);
   assert.ok(overlapFree(out));
 });
+
+test('sanitizeLayout repairs a corrupt personal layout instead of crashing', () => {
+  const { layout } = L.sanitizeLayout({ schema: 1, screens: [null, 'x', { widgets: [{ type: 'map' }, { type: 'donut', x: 'a', y: null, w: Infinity, h: -3 }] }] });
+  assert.equal(layout.screens.length, 1);
+  const s = layout.screens[0];
+  assert.match(s.id, /^[a-z0-9-]+$/); assert.ok(s.name.length > 0);
+  s.widgets.forEach(w => ['x', 'y', 'w', 'h'].forEach(k => assert.ok(Number.isFinite(w[k]), w.type + '.' + k)));
+  assert.ok(overlapFree(s.widgets));
+});
+
+test('sanitizeLayout reports a layout with no usable screens as empty', () => {
+  for (const bad of [{}, { screens: [] }, { screens: [null] }, null]) {
+    assert.equal(L.sanitizeLayout(bad).empty, true);
+  }
+  assert.equal(L.sanitizeLayout({ screens: [{ id: 'a', name: 'A', widgets: [] }] }).empty, false);
+});

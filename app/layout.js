@@ -72,18 +72,29 @@
   }
   function removeWidget(items, i) { return compact(copy(items).filter(function (_, k) { return k !== i; })); }
 
+  function num(v, d) { v = Number(v); return Number.isFinite(v) ? v : d; }
   function sanitizeLayout(layout) {
-    var notes = [];
-    var screens = (layout && layout.screens || []).map(function (s) {
+    // Accepts anything (an old, newer or corrupt personal layout from localStorage) and returns a usable layout,
+    // notes for whatever was dropped, and empty:true when no screen survived.
+    var notes = [], ids = [];
+    var raw = (layout && Array.isArray(layout.screens)) ? layout.screens : [];
+    var screens = raw.filter(function (s) { return s && typeof s === 'object'; }).map(function (s, n) {
+      var name = String(s.name || '').trim().slice(0, 40) || ('Screen ' + (n + 1));
+      var id = typeof s.id === 'string' && /^[a-z0-9-]{1,24}$/.test(s.id) && ids.indexOf(s.id) < 0 ? s.id : slug(name, ids);
+      ids.push(id);
       var seen = {};
-      var widgets = (s.widgets || []).filter(function (w) {
-        if (!WIDGETS[w.type]) { notes.push('Dropped unknown widget "' + w.type + '" on screen "' + s.name + '".'); return false; }
+      var widgets = (Array.isArray(s.widgets) ? s.widgets : []).filter(function (w) {
+        if (!w || !WIDGETS[w.type]) { notes.push('Dropped unknown widget "' + (w && w.type) + '" on screen "' + name + '".'); return false; }
         if (seen[w.type]) return false;
         seen[w.type] = 1; return true;
-      }).map(function (w) { return clampItem({type: w.type, x: w.x, y: w.y, w: w.w, h: w.h}); });
-      return {id: s.id, name: s.name, wall: !!s.wall, widgets: widgets};
+      }).map(function (w) {
+        var d = WIDGETS[w.type];
+        return clampItem({type: w.type, x: num(w.x, 0), y: num(w.y, 0), w: num(w.w, d.w), h: num(w.h, d.h)});
+      });
+      return {id: id, name: name, wall: !!s.wall, widgets: compact(widgets)};
     });
-    return {layout: {schema: 1, version: layout && layout.version || 0, saved_at: layout && layout.saved_at, screens: screens}, notes: notes};
+    return {layout: {schema: 1, version: layout && layout.version || 0, saved_at: layout && layout.saved_at, screens: screens},
+            notes: notes, empty: screens.length === 0};
   }
   function isPersonalStale(personal, shared) { return !!personal && personal.baseVersion !== shared.version; }
 

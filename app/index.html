@@ -1150,12 +1150,15 @@ body.editing .edit-bar{display:flex}
       var res = L.sanitizeLayout(j.layout);
       BOARD.shared = res.layout; BOARD.notes = (j.notes||[]).concat(res.notes);
       if(BOARD.personal){
-        var p = L.sanitizeLayout(BOARD.personal.layout);
-        BOARD.personal.layout = p.layout; BOARD.notes = BOARD.notes.concat(p.notes);
+        var p = L.sanitizeLayout(BOARD.personal && BOARD.personal.layout);
+        if(p.empty){                                  // corrupt or empty personal layout: drop it, never leave the page stuck
+          BOARD.personal = null; try { localStorage.removeItem('obsPersonalLayout'); } catch(e){}
+          BOARD.notes.push('Your personal layout could not be used and was discarded; showing the shared layout.');
+        } else { BOARD.personal.layout = p.layout; BOARD.notes = BOARD.notes.concat(p.notes); }
       }
       var n = $('#boardNotes'); n.hidden = !BOARD.notes.length; n.textContent = BOARD.notes.join(' ');
+      renderLayoutState();                            // before the board, so Reset to shared exists even if rendering fails
       renderBoard();
-      renderLayoutState();
       if(!loadSharedLayout.done){ loadSharedLayout.done = 1; if(/[?&]wall=1\b/.test(location.search)) setWall(true); }
     });
   }

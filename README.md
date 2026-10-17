@@ -47,6 +47,7 @@ Common options:
 | `--sites "Name=lat,lon,City;1.2.3.4=lat,lon"` | pin firewalls the map cannot place on its own (by device name or WAN IP) |
 | `--home "lat,lon,City"` | where unplaceable firewalls are drawn (default Toronto) |
 | `--support "Name\|email\|phone\|url"` | contact shown when the logo is clicked (default Cyber Security Canada, info@cybersecuritycanada.com) |
+| `--abuseipdb-key KEY` / `--virustotal-key KEY` | enable live IP-reputation lookups on alert detail (see Security) |
 
 Other commands: `sudo ./install.sh status | logs | password [NEW] | uninstall [--purge]`.
 `uninstall` keeps your stored history; `--purge` deletes it, the config and the image.
@@ -79,6 +80,16 @@ enrichment (`origin.geolocation` / `target.geolocation`), so **no GeoIP database
 - **WHOIS** (alert detail) sends the looked-up public IP to `rdap.org`, which forwards to the regional registry. Private addresses are never sent. Results are cached for 24 hours.
 - The history database stores counts only, not raw events.
 
+## Settings panel
+
+The gear icon in the header (top right) opens a **Settings** drawer for things you'd otherwise only set via
+`install.sh` flags: the dashboard login, the AbuseIPDB/VirusTotal keys, the support contact, the map's home
+location and site pins, and the AI-traffic hosts. Changes save to `/data/settings.json` (the same persistent
+volume as the history database) and take effect immediately, no restart — a password change signs you out and
+reloads the page so you log back in with the new one. A setting saved here overrides the matching `install.sh`
+flag/env var; leaving a field blank on save clears the override and falls back to whatever `install.sh` set.
+Dashboard layout (widgets, screens, wall rotation) has its own editor — the drawer just links to it.
+
 ## Rebuild from GitHub
 
 Everything needed is in this repository (`vbeitner/utmstack-observatory`, private). On the UTMStack Swarm manager:
@@ -106,6 +117,7 @@ Tests (standard library only, OpenSearch stubbed): `python3 -m unittest discover
 | Install settings | `/etc/utmstack-observatory/config.env` |
 | Dashboard password | `/etc/utmstack-observatory/admin.pass` |
 | Shared dashboard layout | Docker volume `utmstack-observatory-data` (`/data/layout.json`) |
+| Live-edited settings (login, API keys, support, map, AI hosts) | Docker volume `utmstack-observatory-data` (`/data/settings.json`) |
 
 History starts when the dashboard is first installed. On a first run it also backfills event counts from UTMStack's ingest
 statistics (`v11-statistics-*`) for as far back as that index goes. Alerts and AI traffic cannot be backfilled.

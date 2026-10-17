@@ -197,6 +197,10 @@ pre.cmd{margin:0 0 12px;padding:10px 12px;background:var(--canvas);border:1px so
 .filters label.grow{flex:1;min-width:180px}
 .filters select,.filters input{height:34px;background:var(--canvas);color:var(--ink);border:1px solid var(--border-strong);border-radius:4px;padding:0 8px;font:12px var(--ui);max-width:240px}
 .filters input{max-width:none;width:100%}
+.set-field{display:flex;flex-direction:column;gap:4px;margin:12px 0}
+.set-field label{font-family:var(--mono);font-size:11.5px;letter-spacing:.08em;color:var(--muted)}
+.set-field input{height:34px;background:var(--canvas);color:var(--ink);border:1px solid var(--border-strong);border-radius:4px;padding:0 8px;font:12px var(--ui);width:100%}
+.set-field .hint{font-size:11.5px;color:var(--muted)}
 .pager{display:flex;align-items:center;justify-content:space-between;gap:12px}
 .pager .ctl[disabled]{opacity:.35;cursor:default}
 .badges{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
@@ -383,6 +387,7 @@ body.paused .mark-core,body.paused .tk.new,body.paused .live-dot{animation-play-
       <button class="ctl" id="wallBtn" aria-pressed="false" title="Wall display: full screen, client names hidden, views rotate every 30 s (Esc exits)">Wall</button>
       <button class="ctl" id="trendsBtn" title="30-day history with daily and weekly comparisons">
         <svg width="13" height="13" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.3" aria-hidden="true"><path d="M1.5 12.5h11M3 10V6.5M6 10V3.5M9 10V7.5M12 10V5"/></svg>Trends · 30 d</button>
+      <button class="ctl icon" id="settingsBtn" title="Settings" aria-label="Settings" aria-haspopup="dialog"><svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.3" aria-hidden="true"><circle cx="7" cy="7" r="2.3"/><path d="M7 1.2v1.6M7 11.2v1.6M1.2 7h1.6M11.2 7h1.6M2.9 2.9l1.1 1.1M9.9 9.9l1.1 1.1M2.9 11.1l1.1-1.1M9.9 4.1l1.1-1.1"/></svg></button>
       <button class="ctl icon" id="fsBtn" title="Fullscreen" aria-label="Toggle fullscreen"><svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.3" aria-hidden="true"><path d="M1.5 5V1.5H5M9 1.5h3.5V5M12.5 9v3.5H9M5 12.5H1.5V9"/></svg></button>
     </div>
   </header>
@@ -568,6 +573,15 @@ body.paused .mark-core,body.paused .tk.new,body.paused .live-dot{animation-play-
     <button class="ctl icon" id="closeSup" aria-label="Close support"><svg width="13" height="13" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.3" aria-hidden="true"><path d="M2 2l10 10M12 2L2 12"/></svg></button>
   </div>
   <div class="drawer-body" id="supBody"><div class="empty">Loading…</div></div>
+</aside>
+
+<aside class="drawer" id="setDrawer" role="dialog" aria-modal="true" aria-labelledby="setTitle" aria-hidden="true">
+  <div class="drawer-head">
+    <div><h2 id="setTitle">Settings</h2><div class="panel-meta">UTMStack Observatory</div></div>
+    <span class="spacer"></span>
+    <button class="ctl icon" id="closeSet" aria-label="Close settings"><svg width="13" height="13" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.3" aria-hidden="true"><path d="M2 2l10 10M12 2L2 12"/></svg></button>
+  </div>
+  <div class="drawer-body" id="setBody"><div class="empty">Loading…</div></div>
 </aside>
 
 <script src="/layout.js"></script>
@@ -2042,6 +2056,81 @@ body.paused .mark-core,body.paused .tk.new,body.paused .live-dot{animation-play-
   $('#closeSup').addEventListener('click', closeSup);
   overlay.addEventListener('click', function(){ if(supDrawer.classList.contains('on')) closeSup(); });
   document.addEventListener('keydown', function(e){ if(e.key==='Escape' && supDrawer.classList.contains('on')) closeSup(); });
+
+  /* ---- settings drawer: dashboard login, API keys, support contact, map home/sites, AI hosts ---- */
+  var setDrawer = $('#setDrawer');
+  function field(id, label, value, hint, opts){
+    opts = opts || {};
+    return '<div class="set-field"><label for="'+id+'">'+esc(label)+'</label>'+
+      '<input id="'+id+'" type="'+(opts.password?'password':'text')+'" maxlength="'+(opts.maxlength||300)+'"'+
+      (opts.placeholder?' placeholder="'+esc(opts.placeholder)+'"':'')+
+      (value!=null?' value="'+esc(value)+'"':'')+'>'+
+      (hint?'<div class="hint">'+esc(hint)+'</div>':'')+'</div>';
+  }
+  function renderSettings(s){
+    var html = '<h3 class="tl-title">Dashboard login</h3>'+
+      field('setUser', 'Username', s.dash_user, null, {maxlength:64}) +
+      field('setPass', 'New password', null, 'At least 8 characters. Leave blank to keep the current one.',
+            {password:true, maxlength:200, placeholder:'Leave blank to keep current'}) +
+      '<h3 class="tl-title">API keys <span class="panel-meta">for live reputation lookups on alert IPs</span></h3>'+
+      field('setAbuse', 'AbuseIPDB key', null, null, {password:true, maxlength:200,
+            placeholder: s.abuseipdb_key_configured ? 'Configured — leave blank to keep' : 'Not set'}) +
+      field('setVt', 'VirusTotal key', null, null, {password:true, maxlength:200,
+            placeholder: s.virustotal_key_configured ? 'Configured — leave blank to keep' : 'Not set'}) +
+      '<h3 class="tl-title">Support contact</h3>'+
+      field('setSupport', 'Shown when the logo is clicked', s.support, 'Format: Name|email|phone|url', {maxlength:2000}) +
+      '<h3 class="tl-title">Live map</h3>'+
+      field('setHome', 'Home location', s.home, "Format: lat,lon[,City] — used when a firewall's own location isn't known", {maxlength:200}) +
+      field('setSites', 'Site pins', s.sites, 'Format: Name=lat,lon,City;1.2.3.4=lat,lon;...', {maxlength:2000}) +
+      '<h3 class="tl-title">AI traffic</h3>'+
+      field('setAi', 'AI hosts', s.ai_hosts, 'Format: name=ip,name=ip — needs Sophos XG firewall logs in UTMStack', {maxlength:2000}) +
+      '<h3 class="tl-title">Dashboard layout</h3>'+
+      '<div class="drawer-foot"><button class="ghost-btn" id="setOpenLayout">Open layout editor</button>'+
+      '<span class="hint">Widgets, screens and the wall rotation have their own editor (Edit, top right of the tab bar).</span></div>'+
+      '<div class="drawer-foot"><button class="ctl" id="setSave" aria-pressed="true">Save</button><span class="hint" id="setNote"></span></div>';
+    $('#setBody').innerHTML = html;
+    $('#setOpenLayout').addEventListener('click', function(){ closeSettings(); setEdit(true); });
+    $('#setSave').addEventListener('click', function(){
+      var patch = {dash_user: $('#setUser').value.trim(), support: $('#setSupport').value.trim(),
+                   home: $('#setHome').value.trim(), sites: $('#setSites').value.trim(), ai_hosts: $('#setAi').value.trim()};
+      if($('#setPass').value) patch.dash_pass = $('#setPass').value;
+      if($('#setAbuse').value) patch.abuseipdb_key = $('#setAbuse').value;
+      if($('#setVt').value) patch.virustotal_key = $('#setVt').value;
+      var credsChanged = patch.dash_pass || patch.dash_user !== s.dash_user;
+      var note = $('#setNote'); note.textContent = 'Saving…'; note.style.color = '';
+      saveSettings(patch).then(function(res){
+        if(res.status !== 200){ note.textContent = res.j.error || ('Save failed (HTTP '+res.status+')'); note.style.color = '#FF8A95'; return; }
+        if(credsChanged){
+          note.textContent = 'Saved. Reloading to sign in with the new login…'; note.style.color = '#68F5B1';
+          setTimeout(function(){ location.reload(); }, 1200);
+          return;
+        }
+        renderSettings(res.j);                    // rebuilds #setNote too, so set its text after, not before
+        var fresh = $('#setNote'); fresh.textContent = 'Saved.'; fresh.style.color = '#68F5B1';
+      }).catch(function(e){ note.textContent = 'Save failed: '+e.message; note.style.color = '#FF8A95'; });
+    });
+  }
+  function saveSettings(patch){
+    return fetch('/api/settings', {method: 'PUT', cache: 'no-store',
+      headers: {'Content-Type': 'application/json', 'X-Observatory': '1'}, body: JSON.stringify(patch)})
+      .then(function(r){ return r.json().then(function(j){ return {status: r.status, j: j}; }); });
+  }
+  function openSettings(){
+    overlay.classList.add('on'); setDrawer.classList.add('on'); setDrawer.setAttribute('aria-hidden','false');
+    $('#setBody').innerHTML = '<div class="empty">Loading…</div>';
+    fetch('/api/settings', {cache:'no-store'}).then(function(r){ return r.json(); })
+      .then(function(s){ renderSettings(s); $('#closeSet').focus(); })
+      .catch(function(e){ $('#setBody').innerHTML = '<div class="empty">Could not load: '+esc(e.message)+'</div>'; });
+  }
+  function closeSettings(){
+    setDrawer.classList.remove('on'); setDrawer.setAttribute('aria-hidden','true');
+    if(!document.querySelector('.drawer.on')) overlay.classList.remove('on');
+    $('#settingsBtn').focus();
+  }
+  $('#settingsBtn').addEventListener('click', openSettings);
+  $('#closeSet').addEventListener('click', closeSettings);
+  overlay.addEventListener('click', function(){ if(setDrawer.classList.contains('on')) closeSettings(); });
+  document.addEventListener('keydown', function(e){ if(e.key==='Escape' && setDrawer.classList.contains('on')) closeSettings(); });
 
   /* ---- entry points: KPI cards, alert table, storage footer ---- */
   $('#kpiBand').addEventListener('click', function(e){

@@ -12,11 +12,12 @@ import urllib.error, urllib.request
 from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-VERSION = "1.2.5"
+VERSION = "1.2.6"
 HERE = os.path.dirname(os.path.abspath(__file__))
 if HERE not in sys.path:                          # the container runs "python3 -I", which leaves this folder off sys.path
     sys.path.insert(0, HERE)
 import layout_store  # noqa: E402  (needs the path above)
+import settings_store  # noqa: E402
 
 
 def env(name, default=""):
@@ -33,13 +34,13 @@ def secret(name):
 
 OS_URL = env("OS_URL").rstrip("/")             # e.g. https://node1:9200 ; empty = docker-exec transport
 OS_USER, OS_PASS = env("OS_USER"), secret("OS_PASS")
-DASH_USER, DASH_PASS = env("DASH_USER", "admin"), secret("DASH_PASS")
-ABUSEIPDB_KEY = secret("ABUSEIPDB_KEY")        # optional: enables live abuse-score lookups on alert IPs
-VIRUSTOTAL_KEY = secret("VIRUSTOTAL_KEY")      # optional: enables live vendor-detection lookups on alert IPs
-PORT = int(env("PORT", "8765"))
-BIND = env("BIND") or env("HOST") or ("0.0.0.0" if DASH_PASS else "127.0.0.1")
-TLS_CERT, TLS_KEY = env("TLS_CERT"), env("TLS_KEY")
 DATA_DIR = env("DATA_DIR", HERE)
+DASH_USER, DASH_PASS = env("DASH_USER", "admin"), secret("DASH_PASS")        # install-time defaults;
+ABUSEIPDB_KEY = secret("ABUSEIPDB_KEY")        # current_*() below is what every request actually uses --
+VIRUSTOTAL_KEY = secret("VIRUSTOTAL_KEY")      # it prefers whatever was saved live over these
+PORT = int(env("PORT", "8765"))
+BIND = env("BIND") or env("HOST") or ("0.0.0.0" if (DASH_PASS or settings_store.configured(DATA_DIR, "dash_pass")) else "127.0.0.1")
+TLS_CERT, TLS_KEY = env("TLS_CERT"), env("TLS_KEY")
 DISK_PATH = env("DISK_PATH", "/utmstack" if os.path.isdir("/utmstack") else "/")
 HOST_NAME = env("HOST_NAME") or os.uname().nodename
 TRANSPORT = "http" if OS_URL else "docker-exec"
@@ -47,6 +48,23 @@ REFRESH_S = 4
 REQUEST_TIMEOUT_S = float(env("REQUEST_TIMEOUT_S", "15"))
 MAX_CONNECTIONS = int(env("MAX_CONNECTIONS", "0") or "0")   # 0 = unlimited
 DOCKER = ["sudo", "-n", "docker"]               # docker-exec transport only (bare-metal installs)
+
+
+def current_dash_user():
+    return settings_store.get(DATA_DIR, "dash_user") or DASH_USER
+
+
+def current_dash_pass():
+    return settings_store.get(DATA_DIR, "dash_pass") or DASH_PASS
+
+
+def current_abuseipdb_key():
+    return settings_store.get(DATA_DIR, "abuseipdb_key") or ABUSEIPDB_KEY
+
+
+def current_virustotal_key():
+    return settings_store.get(DATA_DIR, "virustotal_key") or VIRUSTOTAL_KEY
+
 
 _state = {"data": {"error": "starting"}, "cid": None}
 _lock = threading.Lock()
@@ -130,7 +148,13 @@ def minute_hist(start="now-61m/m"):
 # Hosts whose firewall-visible traffic is reported on the "AI Traffic" tab, e.g. AI_HOSTS="gx10=10.0.2.34,webai=10.0.2.17".
 # Needs Sophos XG firewall logs in UTMStack. Empty = feature off.
 AI_HOSTS = dict(p.strip().split("=", 1) for p in env("AI_HOSTS").split(",") if "=" in p)
-_IP2NAME = {ip: n for n, ip in AI_HOSTS.items()}
+
+
+def current_ai_hosts():
+    raw = settings_store.get(DATA_DIR, "ai_hosts")
+    if raw is None:
+        return AI_HOSTS
+    return dict(p.strip().split("=", 1) for p in raw.split(",") if "=" in p)
 
 
 def _bytes_script(field):
@@ -145,9 +169,11 @@ def _sums():
 
 
 def ai_traffic():
-    if not AI_HOSTS:
+    ai_hosts = current_ai_hosts()
+    if not ai_hosts:
         return {"configured": False}
-    quoted = [json.dumps(ip) for ip in AI_HOSTS.values()]   # log values carry literal quotes
+    ip2name = {ip: n for n, ip in ai_hosts.items()}
+    quoted = [json.dumps(ip) for ip in ai_hosts.values()]   # log values carry literal quotes
     ranged = {"range": {"@timestamp": {"gte": "now-24h"}}}
     hist = {"date_histogram": {"field": "@timestamp", "fixed_interval": "1h", "min_doc_count": 0,
                                "extended_bounds": {"min": "now-24h/h", "max": "now/h"}},
@@ -175,13 +201,13 @@ def ai_traffic():
 
     # Direction is relative to the AI host: "in" = bytes the AI host received, "out" = bytes it sent.
     # Sophos: bytes_sent = originator -> responder, bytes_received = responder -> originator.
-    hosts = {n: {"name": n, "ip": ip, "in": 0, "out": 0, "conn_in": 0, "conn_out": 0} for n, ip in AI_HOSTS.items()}
+    hosts = {n: {"name": n, "ip": ip, "in": 0, "out": 0, "conn_in": 0, "conn_out": 0} for n, ip in ai_hosts.items()}
     for b in to_ai["hosts"]["buckets"]:
-        h = hosts.get(_IP2NAME.get(clean(b["key"])))
+        h = hosts.get(ip2name.get(clean(b["key"])))
         if h:
             h["in"] += b["sent"]["value"]; h["out"] += b["recv"]["value"]; h["conn_in"] += b["doc_count"]
     for b in from_ai["hosts"]["buckets"]:
-        h = hosts.get(_IP2NAME.get(clean(b["key"])))
+        h = hosts.get(ip2name.get(clean(b["key"])))
         if h:
             h["out"] += b["sent"]["value"]; h["in"] += b["recv"]["value"]; h["conn_out"] += b["doc_count"]
 
@@ -392,9 +418,10 @@ def fetch_hourly(gte):
             sev = {s["key"]: s["doc_count"] for s in b["sev"]["buckets"]}
             out["alerts"][b["key"]] = {"n": b["doc_count"], "high": sev.get("High", 0) + sev.get("Critical", 0),
                                        "med": sev.get("Medium", 0), "low": sev.get("Low", 0)}
-    if not AI_HOSTS:
+    ai_hosts = current_ai_hosts()
+    if not ai_hosts:
         return out
-    quoted = [json.dumps(ip) for ip in AI_HOSTS.values()]
+    quoted = [json.dumps(ip) for ip in ai_hosts.values()]
     r = _safe("/v11-log-firewall-sophos-xg-*/_search", {"size": 0, "query": {"bool": {"filter": [rq], "should": [
         {"terms": {"log.dst_ip.keyword": quoted}}, {"terms": {"log.src_ip.keyword": quoted}}], "minimum_should_match": 1}},
         "aggs": {"to": {"filter": {"terms": {"log.dst_ip.keyword": quoted}}, "aggs": {"h": _hist(_sums())}},
@@ -535,7 +562,7 @@ def compute_history():
             entry[m] = sum(vals) if vals else None
         days.append(entry)
     first = lambda f: next((datetime.fromtimestamp(r[0] / 1000).strftime("%Y-%m-%d") for r in rows if f(r)), None)
-    return {"generated": datetime.now(timezone.utc).isoformat(), "retain_days": RETAIN_DAYS, "ai_configured": bool(AI_HOSTS),
+    return {"generated": datetime.now(timezone.utc).isoformat(), "retain_days": RETAIN_DAYS, "ai_configured": bool(current_ai_hosts()),
             "daily": daily, "weekly": weekly, "days": days,
             "since": {"events": first(lambda r: r[1] is not None), "live": first(lambda r: r[6] == "live"),
                       "alerts": first(lambda r: r[2] is not None), "ai": first(lambda r: r[4] is not None)},
@@ -864,11 +891,12 @@ REPUTATION_TTL_S = 86400
 
 
 def _abuseipdb(ip):
-    if not ABUSEIPDB_KEY:
+    key = current_abuseipdb_key()
+    if not key:
         return {"configured": False}
     req = urllib.request.Request(
         "https://api.abuseipdb.com/api/v2/check?ipAddress=%s&maxAgeInDays=90" % ip,
-        headers={"Key": ABUSEIPDB_KEY, "Accept": "application/json", "User-Agent": "utmstack-observatory/1.0"})
+        headers={"Key": key, "Accept": "application/json", "User-Agent": "utmstack-observatory/1.0"})
     try:
         with urllib.request.urlopen(req, timeout=10) as r:
             d = json.loads(r.read(200_000))["data"]
@@ -881,10 +909,11 @@ def _abuseipdb(ip):
 
 
 def _virustotal(ip):
-    if not VIRUSTOTAL_KEY:
+    key = current_virustotal_key()
+    if not key:
         return {"configured": False}
     req = urllib.request.Request("https://www.virustotal.com/api/v3/ip_addresses/%s" % ip,
-                                  headers={"x-apikey": VIRUSTOTAL_KEY, "User-Agent": "utmstack-observatory/1.0"})
+                                  headers={"x-apikey": key, "User-Agent": "utmstack-observatory/1.0"})
     try:
         with urllib.request.urlopen(req, timeout=10) as r:
             a = json.loads(r.read(500_000))["data"]["attributes"]
@@ -1059,6 +1088,20 @@ def parse_sites(text):
 
 HOME = parse_loc(env("HOME_LOCATION")) or {"lat": 43.6532, "lon": -79.3832, "city": "Toronto"}
 SITE_OVERRIDES = parse_sites(env("SITE_LOCATIONS"))
+
+
+def current_home():
+    raw = settings_store.get(DATA_DIR, "home")
+    if raw is None:
+        return HOME
+    return parse_loc(raw) or HOME
+
+
+def current_site_overrides():
+    raw = settings_store.get(DATA_DIR, "sites")
+    return SITE_OVERRIDES if raw is None else parse_sites(raw)
+
+
 _geo_cache = {}
 _geo_lock = threading.Lock()
 _sites = {"t": 0, "list": []}
@@ -1093,18 +1136,19 @@ def fw_sites():
     r = os_call(FW_SEARCH, {"size": 0, "query": rng("now-1h"), "aggs": {"fw": {
         "terms": {"field": "dataSource.keyword", "size": 100},
         "aggs": {"dn": {"terms": {"field": "log.deviceName.keyword", "size": 1}}}}}})
+    site_overrides, home = current_site_overrides(), current_home()
     out = []
     for b in r["aggregations"]["fw"]["buckets"]:
         ip = _q(b["key"])
         name = _q(b["dn"]["buckets"][0]["key"]) if b["dn"]["buckets"] else ip
-        loc, source = SITE_OVERRIDES.get(name) or SITE_OVERRIDES.get(ip), "configured"
+        loc, source = site_overrides.get(name) or site_overrides.get(ip), "configured"
         if not loc:
             try:
                 loc, source = _locate_ip(ip), "geoip"
             except Exception:
                 loc = None
         if not loc:
-            loc, source = HOME, "home"
+            loc, source = home, "home"
         out.append({"id": ip, "name": name, "lat": loc["lat"], "lon": loc["lon"], "city": loc.get("city"), "loc_source": source})
     out.sort(key=lambda x: x["name"].lower())
     _sites.update(t=time.time(), list=out)
@@ -1154,7 +1198,8 @@ def build_geo(window):
     for b in a["per_fw"]["buckets"]:
         ip = _q(b["key"])
         if ip not in by_id:                      # firewall seen for the first time since the site list was cached
-            by_id[ip] = {"id": ip, "name": ip, "lat": HOME["lat"], "lon": HOME["lon"], "city": HOME.get("city"), "loc_source": "home"}
+            home = current_home()
+            by_id[ip] = {"id": ip, "name": ip, "lat": home["lat"], "lon": home["lon"], "city": home.get("city"), "loc_source": "home"}
             sites.append(by_id[ip])
         d, f = _outcomes(b["out"]["buckets"])
         by_id[ip].update(total=b["doc_count"], denied=d)
@@ -1194,7 +1239,7 @@ def build_geo(window):
     return {"window_s": window, "generated": datetime.now(timezone.utc).isoformat(),
             "age_s": round(max(0, time.time() - newest / 1000), 1) if newest else None,
             "total": total, "denied": denied, "failed": failed, "per_min": round(total * 60 / window),
-            "home": HOME, "sites": sites, "arcs": arcs[:MAX_ARCS], "arcs_total": len(arcs),
+            "home": current_home(), "sites": sites, "arcs": arcs[:MAX_ARCS], "arcs_total": len(arcs),
             "countries": sorted(countries.values(), key=lambda c: c["count"], reverse=True)[:12],
             "ticker": ticker}
 
@@ -1248,9 +1293,14 @@ def parse_support(text):
 SUPPORT = parse_support(env("SUPPORT_CONTACT"))
 
 
+def current_support():
+    raw = settings_store.get(DATA_DIR, "support")
+    return SUPPORT if raw is None else parse_support(raw)
+
+
 def api_support(anon=False):
     """Contact + health summary for the support panel. Never includes secrets or client names."""
-    out = {"contact": SUPPORT, "version": VERSION, "installed": env("INSTALLED_AT") or None}
+    out = {"contact": current_support(), "version": VERSION, "installed": env("INSTALLED_AT") or None}
     if anon:                                     # wall screen: contact and version only
         return out
     with _lock:
@@ -1332,6 +1382,39 @@ def login_attempt(ip, check):
 
 
 _layout_lock = threading.Lock()                  # one writer at a time; version check + save are atomic together
+_settings_lock = threading.Lock()
+
+
+def api_settings():
+    """The settings drawer's form values: override-or-env-default for plain fields, just a flag for secrets."""
+    state = settings_store.public_state(DATA_DIR)
+    state.update(
+        dash_user=settings_store.get(DATA_DIR, "dash_user", DASH_USER),
+        support=settings_store.get(DATA_DIR, "support", env("SUPPORT_CONTACT")),
+        home=settings_store.get(DATA_DIR, "home", env("HOME_LOCATION")),
+        sites=settings_store.get(DATA_DIR, "sites", env("SITE_LOCATIONS")),
+        ai_hosts=settings_store.get(DATA_DIR, "ai_hosts", env("AI_HOSTS")),
+    )
+    return state
+
+
+def validate_settings_patch(patch):
+    """Reject values that would be silently useless or dangerous; settings_store.save() only checks shape/size."""
+    if "dash_user" in patch and not patch["dash_user"].strip():
+        raise ValueError("the dashboard username cannot be empty")
+    if "dash_pass" in patch and len(patch["dash_pass"]) < 8:
+        raise ValueError("the dashboard password must be at least 8 characters")
+    if patch.get("home") and not parse_loc(patch["home"]):
+        raise ValueError("home must be 'lat,lon[,city]'")
+    if patch.get("sites"):
+        for item in patch["sites"].split(";"):
+            key, _, loc = item.partition("=")
+            if key.strip() and not parse_loc(loc):
+                raise ValueError("sites: bad location for %r" % key.strip())
+    if patch.get("ai_hosts"):
+        for p in patch["ai_hosts"].split(","):
+            if p.strip() and "=" not in p:
+                raise ValueError("ai_hosts must be 'name=ip,name=ip'")
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -1370,7 +1453,7 @@ class Handler(BaseHTTPRequestHandler):
     def gate(self):
         """Authenticate the request with a per-IP lockout. Sends the 401/429 itself; returns True when allowed.
         Requests without credentials (a browser's first try) do not count as failures."""
-        if not DASH_PASS:
+        if not current_dash_pass():
             return True
         ip = self.client_address[0]
         has_creds = bool(self.headers.get("Authorization"))
@@ -1389,7 +1472,7 @@ class Handler(BaseHTTPRequestHandler):
         return False
 
     def authorized(self):
-        if not DASH_PASS:
+        if not current_dash_pass():
             return True
         h = self.headers.get("Authorization", "")
         if h.startswith("Basic "):
@@ -1397,8 +1480,8 @@ class Handler(BaseHTTPRequestHandler):
                 user, _, pw = base64.b64decode(h[6:]).decode().partition(":")
             except Exception:
                 return False
-            ok_u = hmac.compare_digest(user.encode(), DASH_USER.encode())
-            ok_p = hmac.compare_digest(pw.encode(), DASH_PASS.encode())
+            ok_u = hmac.compare_digest(user.encode(), current_dash_user().encode())
+            ok_p = hmac.compare_digest(pw.encode(), current_dash_pass().encode())
             return ok_u and ok_p
         return False
 
@@ -1421,6 +1504,7 @@ class Handler(BaseHTTPRequestHandler):
             "/api/whois": lambda: api_whois(p.get("ip", "")[:64]),
             "/api/reputation": lambda: api_reputation(p.get("ip", "")[:64]),
             "/api/support": lambda: api_support(p.get("anon") == "1"),
+            "/api/settings": lambda: api_settings(),
             "/api/geo": lambda: api_geo(int(p["window"]) if p.get("window", "").isdigit() else 60,
                                         p.get("anon") == "1"),
         }
@@ -1463,14 +1547,15 @@ class Handler(BaseHTTPRequestHandler):
         u = urlparse(self.path)
         if not self.gate():
             return
-        if u.path != "/api/layout":
+        if u.path not in ("/api/layout", "/api/settings"):
             self.send(404, "text/plain", b"not found")
             return
+        cap = layout_store.MAX_BYTES if u.path == "/api/layout" else settings_store.MAX_BYTES
         try:
             n = int(self.headers.get("Content-Length") or 0)
         except ValueError:
             n = -1
-        if not 0 <= n <= layout_store.MAX_BYTES + 1024:
+        if not 0 <= n <= cap + 1024:
             self.send(400, "application/json", b'{"error":"request too large or missing length"}')
             self.close_connection = True
             return
@@ -1482,13 +1567,19 @@ class Handler(BaseHTTPRequestHandler):
             req = json.loads(body or b"{}")
             if not isinstance(req, dict):
                 raise ValueError("request body must be a JSON object")
-            with _layout_lock:
-                current = layout_store.load(DATA_DIR)
-                if req.get("base_version") != current.get("version"):
-                    self.send(409, "application/json", json.dumps({"error": "conflict", "layout": current}).encode())
-                    return
-                saved = layout_store.save(DATA_DIR, req.get("layout"))
-            self.send(200, "application/json", json.dumps({"layout": saved}).encode())
+            if u.path == "/api/layout":
+                with _layout_lock:
+                    current = layout_store.load(DATA_DIR)
+                    if req.get("base_version") != current.get("version"):
+                        self.send(409, "application/json", json.dumps({"error": "conflict", "layout": current}).encode())
+                        return
+                    saved = layout_store.save(DATA_DIR, req.get("layout"))
+                self.send(200, "application/json", json.dumps({"layout": saved}).encode())
+            else:
+                with _settings_lock:
+                    validate_settings_patch(req)
+                    settings_store.save(DATA_DIR, req)
+                self.send(200, "application/json", json.dumps(settings_store.public_state(DATA_DIR)).encode())
         except ValueError as e:
             self.send(400, "application/json", json.dumps({"error": str(e)[:200]}).encode())
 
@@ -1520,7 +1611,7 @@ class Server(ThreadingHTTPServer):
 if __name__ == "__main__":
     if TRANSPORT == "docker-exec" and not OS_PASS:
         OS_PASS = get_password()
-    if not DASH_PASS and BIND not in ("127.0.0.1", "localhost", "::1") and env("ALLOW_NO_AUTH") != "1":
+    if not current_dash_pass() and BIND not in ("127.0.0.1", "localhost", "::1") and env("ALLOW_NO_AUTH") != "1":
         sys.exit("Refusing to listen on %s without a login. Set DASH_PASS (or DASH_PASS_FILE), "
                  "bind to 127.0.0.1, or set ALLOW_NO_AUTH=1." % BIND)
     threading.Thread(target=refresher, daemon=True).start()
@@ -1535,5 +1626,5 @@ if __name__ == "__main__":
         srv.tls_context = tls
         scheme = "https"
     print("UTMStack Observatory %s on %s://%s:%d  (opensearch via %s, login %s, data %s)" % (
-        VERSION, scheme, BIND, PORT, "direct" if TRANSPORT == "http" else "docker-exec", "on" if DASH_PASS else "OFF", DATA_DIR), flush=True)
+        VERSION, scheme, BIND, PORT, "direct" if TRANSPORT == "http" else "docker-exec", "on" if current_dash_pass() else "OFF", DATA_DIR), flush=True)
     srv.serve_forever()

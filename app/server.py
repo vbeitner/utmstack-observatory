@@ -12,6 +12,8 @@ import urllib.error, urllib.request
 from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
+import layout_store
+
 VERSION = "1.1.2"
 HERE = os.path.dirname(os.path.abspath(__file__))
 
@@ -1177,6 +1179,9 @@ def refresher():
         time.sleep(max(0.5, REFRESH_S - (time.time() - t0)))
 
 
+_layout_lock = threading.Lock()                  # one writer at a time; version check + save are atomic together
+
+
 class Handler(BaseHTTPRequestHandler):
     def log_message(self, *a):
         pass
@@ -1188,7 +1193,7 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("X-Content-Type-Options", "nosniff")
         self.send_header("X-Frame-Options", "DENY")
         self.send_header("Referrer-Policy", "no-referrer")
-        self.send_header("Content-Security-Policy", "default-src 'self'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; "
+        self.send_header("Content-Security-Policy", "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'unsafe-inline'; "
                          "img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'")
         for k, v in (extra or {}).items():
             self.send_header(k, v)
@@ -1253,6 +1258,12 @@ class Handler(BaseHTTPRequestHandler):
             except Exception as e:  # report to the UI instead of dropping the connection
                 body = json.dumps({"error": str(e)[:300]}).encode()
             self.send(200, "application/json", body)
+        elif u.path == "/layout.js":
+            with open(os.path.join(HERE, "layout.js"), "rb") as f:
+                self.send(200, "text/javascript; charset=utf-8", f.read())
+        elif u.path == "/api/layout":
+            lay = layout_store.load(DATA_DIR)
+            self.send(200, "application/json", json.dumps({"layout": lay, "notes": []}).encode())
         elif u.path == "/land.json":                  # static world outline for the live map
             with open(os.path.join(HERE, "land.json"), "rb") as f:
                 self.send(200, "application/json", f.read(), {"Cache-Control": "private, max-age=86400"})
@@ -1261,6 +1272,42 @@ class Handler(BaseHTTPRequestHandler):
                 self.send(200, "text/html; charset=utf-8", f.read())
         else:
             self.send(404, "text/plain", b"not found")
+
+    def do_PUT(self):
+        u = urlparse(self.path)
+        if not self.authorized():
+            time.sleep(0.5)
+            self.send(401, "text/plain", b"Authentication required",
+                      {"WWW-Authenticate": 'Basic realm="UTMStack Observatory", charset="UTF-8"'})
+            return
+        if u.path != "/api/layout":
+            self.send(404, "text/plain", b"not found")
+            return
+        try:
+            n = int(self.headers.get("Content-Length") or 0)
+        except ValueError:
+            n = -1
+        if not 0 <= n <= layout_store.MAX_BYTES + 1024:
+            self.send(400, "application/json", b'{"error":"request too large or missing length"}')
+            self.close_connection = True
+            return
+        body = self.rfile.read(n)                 # always consume the body, or a rejected request resets the socket
+        if not layout_store.csrf_ok(self.headers):
+            self.send(403, "application/json", b'{"error":"forbidden"}')
+            return
+        try:
+            req = json.loads(body or b"{}")
+            if not isinstance(req, dict):
+                raise ValueError("request body must be a JSON object")
+            with _layout_lock:
+                current = layout_store.load(DATA_DIR)
+                if req.get("base_version") != current.get("version"):
+                    self.send(409, "application/json", json.dumps({"error": "conflict", "layout": current}).encode())
+                    return
+                saved = layout_store.save(DATA_DIR, req.get("layout"))
+            self.send(200, "application/json", json.dumps({"layout": saved}).encode())
+        except ValueError as e:
+            self.send(400, "application/json", json.dumps({"error": str(e)[:200]}).encode())
 
 
 if __name__ == "__main__":

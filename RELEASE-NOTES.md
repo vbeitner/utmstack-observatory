@@ -1,5 +1,17 @@
 # Release notes
 
+## 1.2.1 — 2026-10-17
+
+**For users**
+- 1.2.0 did not start on the server (it stopped with "No module named 'layout_store'") and was rolled back to 1.1.2
+  within minutes. 1.2.1 is 1.2.0 with that fixed: everything listed under 1.2.0 below is now live.
+
+**Technical**
+- The container starts the dashboard with `python3 -I` (isolated mode), which leaves the app folder off `sys.path`, so
+  the new `layout_store` module could not be imported. `server.py` now adds its own folder explicitly.
+- New test `tests/test_container_start.py` starts `server.py` exactly like the container does, so this cannot slip
+  through again. Tests: 43 Python + 13 JavaScript.
+
 ## 1.2.0 — 2026-10-17
 
 **For users**

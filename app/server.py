@@ -12,10 +12,11 @@ import urllib.error, urllib.request
 from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-import layout_store
-
-VERSION = "1.2.0"
+VERSION = "1.2.1"
 HERE = os.path.dirname(os.path.abspath(__file__))
+if HERE not in sys.path:                          # the container runs "python3 -I", which leaves this folder off sys.path
+    sys.path.insert(0, HERE)
+import layout_store  # noqa: E402  (needs the path above)
 
 
 def env(name, default=""):

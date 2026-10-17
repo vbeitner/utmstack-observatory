@@ -1,5 +1,17 @@
 # Release notes
 
+## 1.2.3 — 2026-10-17
+
+**For users**
+- The "make OpenSearch green" advice now gives **one command per system index family** instead of one for all of
+  them. OpenSearch refuses the whole request if even one of those indices is protected, which is what happened when
+  the advice was run on 2026-10-17; with separate commands, the allowed ones go through.
+- A short note explains that a "403 no permissions" answer on a system index means it is protected and needs the
+  OpenSearch super-admin certificate; the other steps are unaffected.
+
+**Technical**
+- `api_cluster().fix` gains `protected_note`; system families are emitted as separate steps. Tests: 44 Python + 13 JS.
+
 ## 1.2.2 — 2026-10-17
 
 **For users**

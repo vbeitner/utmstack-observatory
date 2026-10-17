@@ -12,7 +12,7 @@ import urllib.error, urllib.request
 from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-VERSION = "1.2.2"
+VERSION = "1.2.3"
 HERE = os.path.dirname(os.path.abspath(__file__))
 if HERE not in sys.path:                          # the container runs "python3 -I", which leaves this folder off sys.path
     sys.path.insert(0, HERE)
@@ -907,11 +907,14 @@ def api_cluster():
         if data:
             fix["steps"].append({"title": "Remove replicas from the existing data indices",
                                  "cmd": opensearch_put_cmd("/%s/_settings" % ",".join(data), '{"index":{"number_of_replicas":0}}')})
-        if system:
-            fix["steps"].append({"title": "Remove replicas from OpenSearch's own (system) indices — run separately; the security "
-                                          "plugin may refuse some of these, which does not affect step 1",
-                                 "cmd": opensearch_put_cmd("/%s/_settings?expand_wildcards=all" % ",".join(system),
+        for fam in system:
+            # One request per family: the security plugin refuses a whole request when any index in it is protected.
+            fix["steps"].append({"title": "Remove replicas from the system index %s" % fam,
+                                 "cmd": opensearch_put_cmd("/%s/_settings?expand_wildcards=all" % fam,
                                                            '{"index":{"number_of_replicas":0}}')})
+        fix["protected_note"] = ("A system-index step that answers 403 'no permissions' means OpenSearch protects that index: "
+                                 "the admin password is not enough, it needs the super-admin certificate (the admin_dn "
+                                 "certificate in opensearch.yml). The other steps are not affected.")
         if series:
             # Legacy template with order 0: it only applies when no composable template matches, so if UTMStack's own
             # (composable) template is ever fixed to match its indices, UTMStack's settings and mappings win.

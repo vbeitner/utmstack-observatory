@@ -48,13 +48,19 @@ class ClusterAdvice(unittest.TestCase):
         self.assertNotIn("-u admin:'", joined)              # never on a command line, only via stdin
 
     def test_system_indices_are_in_their_own_step(self):
-        data, system, template = self.fix["steps"]
+        data, template = self.fix["steps"][0], self.fix["steps"][-1]
+        system = self.fix["steps"][1:-1]
         self.assertIn("v11-alert-*", data["cmd"])
         self.assertNotIn(".opendistro", data["cmd"])
-        self.assertIn(".opendistro-ism-config", system["cmd"])
-        self.assertIn("expand_wildcards=all", system["cmd"])   # hidden indices need it
-        self.assertIn('\\"v11-alert-*\\"', template["cmd"])
-        self.assertNotIn("ism-config", template["cmd"])        # single existing index: a template can never apply
+        # one request per system family: the security plugin refuses a whole request if any one index is protected
+        targets = [st["cmd"].split("https://localhost:9200/")[1].split("/_settings")[0] for st in system]
+        self.assertEqual(sorted(targets), sorted(["security-auditlog-*", ".opendistro-ism-config",
+                                                  ".opendistro-job-scheduler-lock", ".plugins-ml-config"]))
+        for st in system:
+            self.assertIn("expand_wildcards=all", st["cmd"])   # hidden indices need it
+
+    def test_explains_what_a_403_on_a_system_index_means(self):
+        self.assertIn("certificate", self.fix["protected_note"])
 
     def test_hostile_index_names_never_reach_the_shell(self):
         joined = "\n".join(self.cmds)
@@ -63,13 +69,15 @@ class ClusterAdvice(unittest.TestCase):
         self.assertTrue(any("v11-log-x" in m for m in self.fix["manual"]))   # reported, not silently dropped
 
     def test_undated_families_keep_their_exact_name(self):
-        system = self.fix["steps"][1]["cmd"]
-        self.assertIn(".plugins-ml-config/", system.replace(",", "/"))
-        self.assertNotIn(".plugins-ml-config-*", system)
+        joined = "\n".join(self.cmds)
+        self.assertIn("/.plugins-ml-config/_settings", joined)
+        self.assertNotIn(".plugins-ml-config-*", joined)
 
     def test_template_is_legacy_low_order_so_utmstack_templates_win(self):
         template = self.fix["steps"][-1]["cmd"]
         self.assertIn("/_template/single-node-no-replicas", template)
+        self.assertIn('\\"v11-alert-*\\"', template)
+        self.assertNotIn("ism-config", template)               # single existing index: a template can never apply
         self.assertNotIn("_index_template", template)
         self.assertIn('\\"order\\":0', template)
 

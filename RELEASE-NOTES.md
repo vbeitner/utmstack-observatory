@@ -1,5 +1,28 @@
 # Release notes
 
+## 1.2.5 — 2026-10-17
+
+**For users**
+- Hovering a row in **Latest Alerts** or **Latest blocked inbound** now zooms and pans the live map
+  to that location, with a pulsing marker and a label, so you can see where a connection or alert
+  is coming from without leaving the list. Move off the row and the map eases back out; everything
+  else on the map keeps animating normally while you look.
+- Opening an alert's detail now shows a **Reputation** section next to WHOIS, with live abuse-score
+  and vendor-detection lookups (AbuseIPDB and VirusTotal) for the IPs involved — when those are
+  configured. Without an API key, that section just says so instead of showing nothing.
+
+**Technical**
+- `/api/geo` ticker entries and `/api/data` alert rows now carry `lat`/`lon` alongside their `ip`,
+  sourced from the same geolocation object the IP came from (adversary, event origin, or target —
+  never mixed). New shared `alert_ip_loc()` helper in `server.py`.
+- New `/api/reputation?ip=` endpoint: AbuseIPDB (`ABUSEIPDB_KEY`) and VirusTotal (`VIRUSTOTAL_KEY`),
+  each optional and independently gated, 24 h in-memory cache matching the existing WHOIS pattern.
+  A provider failing never blocks the other.
+- Map: hover-triggered camera is a pure canvas transform (translate/scale/translate) around the
+  existing fixed world projection — no reprojection, so the land layer and hit-testing stay simple.
+  The map's own mouse-hover tooltip is suppressed while a row-hover zoom is active to avoid the two
+  fighting over the same tooltip element. Tests: 61 Python + 13 JS.
+
 ## 1.2.4 — 2026-10-17
 
 **For users**

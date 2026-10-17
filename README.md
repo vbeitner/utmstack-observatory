@@ -125,6 +125,8 @@ The installer sets these; you only need them to run `app/server.py` by hand.
 | `DATA_DIR` | app dir | where `history.db` lives |
 | `DISK_PATH` | `/utmstack` | path on the filesystem to report free space for |
 | `HOST_NAME`, `TZ` | | shown in the Resource panel / used for day boundaries |
+| `ABUSEIPDB_KEY` / `_FILE` | *(off)* | enables live AbuseIPDB abuse-score lookups on an alert's IPs |
+| `VIRUSTOTAL_KEY` / `_FILE` | *(off)* | enables live VirusTotal vendor-detection lookups on an alert's IPs |
 | `REQUEST_TIMEOUT_S` | `15` | idle/slow clients are dropped after this many seconds |
 | `LOGIN_MAX_FAILURES`, `LOGIN_LOCK_S` | `5`, `900` | failed logins from one address before it's locked out, and for how long |
 | `MAX_CONNECTIONS` | *(unlimited)* | concurrent connections accepted; over the cap, new ones are refused immediately instead of queued |

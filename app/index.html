@@ -21,7 +21,24 @@ body{background:var(--canvas);color:var(--ink);font-family:var(--ui);font-size:1
 .sr-only{position:absolute;width:1px;height:1px;margin:-1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
 button{font-family:inherit;color:inherit;background:none;border:0;cursor:pointer}
 :focus-visible{outline:2px solid var(--cyan);outline-offset:2px}
-.shell{min-height:100dvh;padding:20px 24px 18px;display:grid;grid-template-rows:72px 146px minmax(360px,1fr) clamp(460px,64vh,780px) clamp(300px,40vh,480px);gap:12px}
+.shell{min-height:100dvh;padding:20px 24px 18px;display:flex;flex-direction:column;gap:12px}
+.tabbar{display:flex;align-items:center;gap:10px;min-height:40px}
+.tabs{display:flex;gap:4px;flex-wrap:wrap}
+.tab{height:34px;padding:0 14px;border:1px solid var(--border);border-radius:4px;font-family:var(--mono);font-size:12.5px;font-weight:600;color:var(--muted);white-space:nowrap}
+.tab[aria-selected="true"]{border-color:var(--cyan);color:var(--cyan);background:var(--cyan-soft)}
+.tab .wall-dot{display:inline-block;width:6px;height:6px;border-radius:50%;background:var(--green);margin-left:8px;vertical-align:middle}
+.board{display:grid;grid-template-columns:repeat(12,minmax(0,1fr));grid-auto-rows:40px;gap:12px}
+.board>[data-widget]{min-width:0;min-height:0}
+.board>[data-widget][hidden]{display:none!important}
+.kpi-band{height:100%}
+.board-notes{font-family:var(--mono);font-size:12px;color:var(--yellow)}
+@media (max-width:1099px){
+  .board{display:flex;flex-direction:column}
+  .board>[data-widget]{grid-column:auto!important;grid-row:auto!important;min-height:var(--mobile-h,320px)}
+  .board>[data-widget="kpis"]{--mobile-h:auto}
+  .board>[data-widget="rate"]{--mobile-h:auto}
+  #editBtn{display:none}
+}
 .panel{background:var(--s1);border:1px solid var(--border);position:relative}
 .hdr{display:grid;grid-template-columns:minmax(300px,1fr) auto minmax(200px,1fr);align-items:center;gap:16px;border-bottom:1px solid var(--border);padding-bottom:12px}
 .identity{display:flex;align-items:center;gap:12px;min-width:0}
@@ -57,10 +74,6 @@ button{font-family:inherit;color:inherit;background:none;border:0;cursor:pointer
 .kpi-secondary{font-family:var(--mono);font-size:12.5px;color:var(--muted);margin-top:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .kpi-rule{position:absolute;left:0;right:0;bottom:0;height:3px}
 .good{color:var(--green)}.warn{color:var(--yellow)}.bad{color:var(--red-ink)}
-.field{display:grid;grid-template-columns:8fr 4fr;gap:12px;min-height:0}
-.col{display:grid;gap:12px;min-height:0}
-.col-left{grid-template-rows:minmax(0,1fr) 78px}
-.col-right{grid-template-rows:auto minmax(0,1fr)}
 .panel-head{height:50px;display:flex;align-items:center;gap:14px;padding:0 16px;border-bottom:1px solid var(--border)}
 .panel-title{font-size:16.5px;font-weight:700;letter-spacing:.01em}
 .panel-meta{font-family:var(--mono);font-size:11.5px;font-weight:600;color:var(--muted);letter-spacing:.04em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
@@ -106,7 +119,6 @@ button{font-family:inherit;color:inherit;background:none;border:0;cursor:pointer
 .fill{height:100%;transition:width 900ms cubic-bezier(.22,1,.36,1)}
 .bar-val{font-family:var(--display);font-size:18px;font-weight:700;text-align:right;font-variant-numeric:tabular-nums}
 .bar-state{font-family:var(--mono);font-size:11px;color:var(--muted);text-align:right;letter-spacing:.08em}
-.bottom{display:grid;grid-template-columns:1.55fr 1fr;gap:32px;min-height:0}
 .alerts-body{overflow:auto;min-height:0}
 table{width:100%;border-collapse:collapse;table-layout:fixed}
 thead th{font-family:var(--mono);font-size:11.5px;font-weight:500;letter-spacing:.12em;color:var(--muted);text-align:left;padding:6px 12px 8px;border-bottom:1px solid var(--border);position:sticky;top:0;background:var(--s1)}
@@ -236,16 +248,13 @@ details.ev .kvt{margin:4px 0 8px}
 .ai-note{font-family:var(--mono);font-size:11.5px;color:var(--muted)}
 .empty{padding:18px 16px;font-family:var(--mono);font-size:12.5px;color:var(--muted)}
 @media (max-width:1099px){
-  .shell{grid-template-rows:auto auto auto minmax(520px,auto) auto;padding:16px}
+  .shell{padding:16px}
   .hdr{grid-template-columns:1fr;gap:12px}
   .hdr-truth,.hdr-ctrl{justify-content:flex-start}
   .kpi-band{grid-template-columns:repeat(2,1fr)}
   .kpi:nth-child(3){border-left:0}
   .kpi:nth-child(n+3){border-top:1px solid var(--border)}
-  .field{grid-template-columns:1fr}
-  .col-left{grid-template-rows:minmax(320px,auto) auto}
   .spark-panel{grid-template-columns:1fr;padding:14px 16px;gap:10px}
-  .bottom{grid-template-columns:1fr;gap:12px}
 }
 @media (max-width:699px){
   .shell{padding:12px;gap:10px}
@@ -287,10 +296,6 @@ details.ev .kvt{margin:4px 0 8px}
 body.wall .shell{height:100dvh;min-height:0;grid-template-rows:72px minmax(0,1fr)}
 body.wall .shell>*{display:none}
 body.wall .shell>.hdr{display:grid}
-body.wall[data-view="map"] main.field{display:grid;grid-template-columns:1fr}
-body.wall[data-view="map"] .col-right{display:none}
-body.wall[data-view="trend"] .shell{grid-template-rows:72px 180px minmax(0,1fr)}
-body.wall[data-view="trend"] #kpiBand,body.wall[data-view="trend"] #trendRow{display:grid}
 body.wall #kSrcSec{visibility:hidden}
 body.wall .map-body{grid-template-columns:minmax(0,1fr) 380px}
 body.wall .map-stats .v{font-size:40px}
@@ -317,15 +322,11 @@ body.wall #rangeSeg,body.wall #trendsBtn,body.wall #mapWin{display:none}
 .map-body{grid-template-columns:minmax(0,1fr) 340px}
 .map-stats .k{white-space:nowrap;letter-spacing:.04em}
 .tk{grid-template-columns:72px minmax(0,1fr)}
-.shell{grid-template-rows:72px 178px clamp(500px,68vh,820px) clamp(380px,46vh,540px) clamp(300px,40vh,480px)}
-.col-map{grid-template-rows:minmax(0,1fr)}
-.field{grid-template-columns:minmax(0,2.4fr) minmax(380px,1fr)}
-.col-map .map-body{grid-template-columns:minmax(0,1fr) 290px}
-.trend-row{display:grid;grid-template-rows:minmax(0,1fr) 78px;gap:12px;min-height:0}
+.map-body{grid-template-columns:minmax(0,1fr) 290px}
 .num{font-size:clamp(44px,4.6vw,72px)}
 .kpi{padding:16px 22px 18px}
 @media (max-width:1599px){ .truth.opt,#trendUpdated{display:none} }
-@media (max-width:1099px){ .shell{grid-template-rows:auto auto minmax(600px,auto) auto auto} .hdr{grid-template-columns:1fr} .trend-row{grid-template-rows:minmax(320px,auto) auto} }
+@media (max-width:1099px){ .hdr{grid-template-columns:1fr} }
 @media (prefers-reduced-motion:reduce){*,*::before,*::after{animation-duration:.001ms!important;transition-duration:.001ms!important}}
 </style>
 </head>
@@ -364,33 +365,37 @@ body.wall #rangeSeg,body.wall #trendsBtn,body.wall #mapWin{display:none}
       <button class="ctl icon" id="fsBtn" title="Fullscreen" aria-label="Toggle fullscreen"><svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.3" aria-hidden="true"><path d="M1.5 5V1.5H5M9 1.5h3.5V5M12.5 9v3.5H9M5 12.5H1.5V9"/></svg></button>
     </div>
   </header>
+  <nav class="tabbar" id="tabbar" aria-label="Screens">
+    <div class="tabs" id="screenTabs" role="tablist"></div>
+    <span class="spacer"></span>
+    <span class="panel-meta" id="layoutState"></span>
+    <button class="ctl" id="editBtn" aria-pressed="false" title="Move, resize, add and remove widgets">Edit</button>
+  </nav>
+  <main class="board" id="board">
+    <section class="kpi-band" id="kpiBand" aria-label="Key metrics" data-widget="kpis">
+      <article class="kpi clk" tabindex="0" role="button" data-open="sources" title="Click: Sources and who produces the most events"><div>
+        <div class="kpi-label">ONLINE DATA SOURCES</div>
+        <div class="kpi-value"><span class="num" id="kSrc">–</span><span class="unit" id="kSrcOf"></span></div><div class="kpi-base"></div></div>
+        <div><div class="kpi-sub" id="kSrcSub">&nbsp;</div><div class="kpi-secondary" id="kSrcSec">&nbsp;</div></div>
+        <div class="kpi-rule" style="background:#35E7FF"></div></article>
+      <article class="kpi clk" tabindex="0" role="button" data-open="types" title="Click: Event breakdown by type"><div>
+        <div class="kpi-label" id="kEvLbl">EVENTS (24 H)</div>
+        <div class="kpi-value"><span class="num" id="kEv">–</span><span class="unit">events</span></div><div class="kpi-base"></div></div>
+        <div><div class="kpi-sub" id="kEvSub">&nbsp;</div><div class="kpi-secondary" id="kEvSec">&nbsp;</div></div>
+        <div class="kpi-rule" style="background:#68F5B1"></div></article>
+      <article class="kpi clk" tabindex="0" role="button" data-open="alerts" title="Click: Full alert list"><div>
+        <div class="kpi-label" id="kAlLbl">ALERTS (24 H)</div>
+        <div class="kpi-value"><span class="num" id="kAl">–</span><span class="unit">alerts</span></div><div class="kpi-base red"></div></div>
+        <div><div class="kpi-sub" id="kAlSub">&nbsp;</div><div class="kpi-secondary" id="kAlSec">&nbsp;</div></div>
+        <div class="kpi-rule" style="background:#FF4D5E"></div></article>
+      <article class="kpi clk" tabindex="0" role="button" data-open="lag" title="Click: What is causing the lag"><div>
+        <div class="kpi-label">INGEST LAG</div>
+        <div class="kpi-value"><span class="num" id="kLag">–</span><span class="unit">s</span></div><div class="kpi-base"></div></div>
+        <div><div class="kpi-sub" id="kLagSub">&nbsp;</div><div class="kpi-secondary" id="kLagSec">&nbsp;</div></div>
+        <div class="kpi-rule" style="background:#35E7FF"></div></article>
+    </section>
 
-  <section class="kpi-band" id="kpiBand" aria-label="Key metrics">
-    <article class="kpi clk" tabindex="0" role="button" data-open="sources" title="Click: Sources and who produces the most events"><div>
-      <div class="kpi-label">ONLINE DATA SOURCES</div>
-      <div class="kpi-value"><span class="num" id="kSrc">–</span><span class="unit" id="kSrcOf"></span></div><div class="kpi-base"></div></div>
-      <div><div class="kpi-sub" id="kSrcSub">&nbsp;</div><div class="kpi-secondary" id="kSrcSec">&nbsp;</div></div>
-      <div class="kpi-rule" style="background:#35E7FF"></div></article>
-    <article class="kpi clk" tabindex="0" role="button" data-open="types" title="Click: Event breakdown by type"><div>
-      <div class="kpi-label" id="kEvLbl">EVENTS (24 H)</div>
-      <div class="kpi-value"><span class="num" id="kEv">–</span><span class="unit">events</span></div><div class="kpi-base"></div></div>
-      <div><div class="kpi-sub" id="kEvSub">&nbsp;</div><div class="kpi-secondary" id="kEvSec">&nbsp;</div></div>
-      <div class="kpi-rule" style="background:#68F5B1"></div></article>
-    <article class="kpi clk" tabindex="0" role="button" data-open="alerts" title="Click: Full alert list"><div>
-      <div class="kpi-label" id="kAlLbl">ALERTS (24 H)</div>
-      <div class="kpi-value"><span class="num" id="kAl">–</span><span class="unit">alerts</span></div><div class="kpi-base red"></div></div>
-      <div><div class="kpi-sub" id="kAlSub">&nbsp;</div><div class="kpi-secondary" id="kAlSec">&nbsp;</div></div>
-      <div class="kpi-rule" style="background:#FF4D5E"></div></article>
-    <article class="kpi clk" tabindex="0" role="button" data-open="lag" title="Click: What is causing the lag"><div>
-      <div class="kpi-label">INGEST LAG</div>
-      <div class="kpi-value"><span class="num" id="kLag">–</span><span class="unit">s</span></div><div class="kpi-base"></div></div>
-      <div><div class="kpi-sub" id="kLagSub">&nbsp;</div><div class="kpi-secondary" id="kLagSec">&nbsp;</div></div>
-      <div class="kpi-rule" style="background:#35E7FF"></div></article>
-  </section>
-
-  <main class="field">
-    <div class="col col-map">
-    <section class="panel map-panel" id="mapPanel" aria-labelledby="mapTitle">
+    <section class="panel map-panel" id="mapPanel" aria-labelledby="mapTitle" data-widget="map">
       <div class="panel-head">
         <span class="panel-title" id="mapTitle">Live Firewall Map</span>
         <span class="panel-meta" id="mapMeta">Connecting…</span>
@@ -414,29 +419,26 @@ body.wall #rangeSeg,body.wall #trendsBtn,body.wall #mapWin{display:none}
       </div>
       <p class="sr-only" id="mapSummary" aria-live="polite"></p>
     </section>
-    </div>
-    <aside class="col col-right">
-      <section class="panel" aria-labelledby="donutTitle">
-        <div class="panel-head"><span class="panel-title" id="donutTitle">Event Source Distribution</span><span class="spacer"></span><span class="panel-meta" id="donutMeta">Share · 24 h</span></div>
-        <div class="donut-body"><canvas class="donut-cv" id="donutCanvas" role="img" aria-label="Event source distribution donut chart."></canvas><div class="donut-legend" id="donutLegend"></div></div>
-      </section>
-      <section class="panel" aria-labelledby="top5Title" style="display:flex;flex-direction:column;min-height:0">
-        <div class="panel-head">
-          <div class="seg" role="tablist" aria-label="Side panel view" id="sideTabs">
-            <button role="tab" id="tabRules" data-tab="rules" aria-selected="true" aria-pressed="true">Alert Rules</button>
-            <button role="tab" id="tabAi" data-tab="ai" aria-selected="false" aria-pressed="false">AI Traffic</button>
-          </div>
-          <span class="spacer"></span><span class="panel-meta" id="sideMeta">By alert count · 24 h</span>
-        </div>
-        <div class="top5-body" id="top5Body" role="tabpanel" aria-labelledby="tabRules"></div>
-        <div class="top5-body ai-body" id="aiBody" role="tabpanel" aria-labelledby="tabAi" hidden></div>
-        <div class="store-foot" id="storeFoot" role="button" tabindex="0" title="Open 30-day storage history"><span class="panel-meta">STORAGE · loading…</span></div>
-      </section>
-    </aside>
-  </main>
 
-  <section class="trend-row" id="trendRow" aria-label="Event trend">
-    <section class="panel trend-panel" aria-labelledby="trendTitle">
+    <section class="panel" aria-labelledby="donutTitle" data-widget="donut">
+      <div class="panel-head"><span class="panel-title" id="donutTitle">Event Source Distribution</span><span class="spacer"></span><span class="panel-meta" id="donutMeta">Share · 24 h</span></div>
+      <div class="donut-body"><canvas class="donut-cv" id="donutCanvas" role="img" aria-label="Event source distribution donut chart."></canvas><div class="donut-legend" id="donutLegend"></div></div>
+    </section>
+
+    <section class="panel" aria-labelledby="top5Title" style="display:flex;flex-direction:column;min-height:0" data-widget="rules">
+      <div class="panel-head">
+        <div class="seg" role="tablist" aria-label="Side panel view" id="sideTabs">
+          <button role="tab" id="tabRules" data-tab="rules" aria-selected="true" aria-pressed="true">Alert Rules</button>
+          <button role="tab" id="tabAi" data-tab="ai" aria-selected="false" aria-pressed="false">AI Traffic</button>
+        </div>
+        <span class="spacer"></span><span class="panel-meta" id="sideMeta">By alert count · 24 h</span>
+      </div>
+      <div class="top5-body" id="top5Body" role="tabpanel" aria-labelledby="tabRules"></div>
+      <div class="top5-body ai-body" id="aiBody" role="tabpanel" aria-labelledby="tabAi" hidden></div>
+      <div class="store-foot" id="storeFoot" role="button" tabindex="0" title="Open 30-day storage history"><span class="panel-meta">STORAGE · loading…</span></div>
+    </section>
+
+    <section class="panel trend-panel" aria-labelledby="trendTitle" data-widget="trend">
       <div class="panel-head">
         <span class="panel-title" id="trendTitle">Real-time Event Trend</span>
         <span class="panel-meta">Granularity 1 min · last 30 min</span>
@@ -455,26 +457,27 @@ body.wall #rangeSeg,body.wall #trendsBtn,body.wall #mapWin{display:none}
       </div>
       <p class="sr-only" id="trendSummary"></p>
     </section>
-    <section class="panel spark-panel" aria-label="Event rate">
+
+    <section class="panel spark-panel" aria-label="Event rate" data-widget="rate">
       <div><div class="spark-label">EVENT RATE</div><div class="spark-value"><span id="epsNum">–</span><span class="unit">events/s</span></div></div>
       <canvas class="spark-cv" id="sparkCanvas" role="img" aria-label="Event rate sparkline, last 60 minutes."></canvas>
       <div class="spark-text" id="sparkText"></div>
     </section>
-  </section>
 
-  <section class="bottom">
-    <section class="panel" aria-labelledby="alertTitle" style="display:flex;flex-direction:column;min-height:0">
+    <section class="panel" aria-labelledby="alertTitle" style="display:flex;flex-direction:column;min-height:0" data-widget="alerts">
       <div class="panel-head"><span class="panel-title" id="alertTitle">Latest Alerts</span><span class="panel-meta" id="alertMeta" style="color:#FF8A95"></span><span class="spacer"></span><span class="panel-meta">Click an alert for detail</span><button class="txt-btn" id="allAlertsBtn">All alerts</button></div>
       <div class="alerts-body"><table>
         <colgroup><col style="width:88px"><col style="width:92px"><col style="width:150px"><col><col style="width:80px"><col style="width:80px"></colgroup>
         <thead><tr><th scope="col">TIME</th><th scope="col">SEVERITY</th><th scope="col">SOURCE</th><th scope="col">ALERT</th><th scope="col" style="text-align:right">EVENTS</th><th scope="col">STATUS</th></tr></thead>
         <tbody id="alertBody"></tbody></table></div>
     </section>
-    <section class="panel" aria-labelledby="resTitle" style="display:flex;flex-direction:column;min-height:0">
+
+    <section class="panel" aria-labelledby="resTitle" style="display:flex;flex-direction:column;min-height:0" data-widget="resources">
       <div class="panel-head"><span class="panel-title" id="resTitle">Resource Utilization</span><span class="spacer"></span><span class="panel-meta" id="resHost"></span></div>
       <div class="res-body" id="resBody"></div>
     </section>
-  </section>
+  </main>
+  <div class="board-notes" id="boardNotes" hidden></div>
 </div>
 
 <div class="overlay" id="overlay"></div>
@@ -537,6 +540,7 @@ body.wall #rangeSeg,body.wall #trendsBtn,body.wall #mapWin{display:none}
   <div class="drawer-body" id="supBody"><div class="empty">Loading…</div></div>
 </aside>
 
+<script src="/layout.js"></script>
 <script>
 (function(){
   'use strict';
@@ -1071,6 +1075,56 @@ body.wall #rangeSeg,body.wall #trendsBtn,body.wall #mapWin{display:none}
   $('#wallBtn').addEventListener('click', function(){ setWall(!wallOn); if(wallOn && document.documentElement.requestFullscreen) document.documentElement.requestFullscreen().catch(function(){}); });
   document.addEventListener('keydown', function(e){ if(e.key==='Escape' && wallOn && !document.querySelector('.drawer.on')) setWall(false); });
   if(/[?&]wall=1\b/.test(location.search)) setWall(true);
+
+  /* ---------- widget board: screens and placement ---------- */
+  var L = window.ObsLayout, boardEl = $('#board');
+  var BOARD = {shared: null, personal: null, layout: null, screenId: null, notes: []};
+  try { BOARD.personal = JSON.parse(localStorage.getItem('obsPersonalLayout') || 'null'); } catch(e){}
+  try { BOARD.screenId = localStorage.getItem('obsScreen'); } catch(e){}
+  function widgetEl(type){ return boardEl.querySelector('[data-widget="'+type+'"]'); }
+  function activeLayout(){ return (!wallOn && BOARD.personal) ? BOARD.personal.layout : BOARD.shared; }
+  function currentScreen(){
+    var lay = activeLayout(), s = lay.screens.filter(function(x){ return x.id === BOARD.screenId; })[0];
+    return s || lay.screens[0];
+  }
+  function renderTabs(){
+    var lay = activeLayout(), cur = currentScreen();
+    $('#screenTabs').innerHTML = lay.screens.map(function(s){
+      return '<button class="tab" role="tab" data-id="'+esc(s.id)+'" aria-selected="'+(s.id===cur.id)+'">'+esc(s.name)+
+        (s.wall ? '<i class="wall-dot" title="Shown in wall mode"></i>' : '')+'</button>';
+    }).join('');
+    $$('#screenTabs .tab').forEach(function(b){ b.addEventListener('click', function(){ showScreen(b.dataset.id); }); });
+  }
+  function renderBoard(){
+    var s = currentScreen(), on = {};
+    s.widgets.forEach(function(w){
+      var el = widgetEl(w.type); if(!el) return;
+      on[w.type] = 1; el.hidden = false;
+      el.style.gridColumn = (w.x+1)+' / span '+w.w; el.style.gridRow = (w.y+1)+' / span '+w.h;
+      el.style.order = String(w.y*100 + w.x);          // reading order for the single-column (mobile) view
+    });
+    $$('#board > [data-widget]').forEach(function(el){ if(!on[el.dataset.widget]) el.hidden = true; });
+    renderTabs();
+    setTimeout(function(){ landCache = null; if(D) apply(D); drawMap(performance.now()); }, 30);   // canvases resize to the new cells
+  }
+  function showScreen(id){
+    BOARD.screenId = id; try { localStorage.setItem('obsScreen', id); } catch(e){}
+    renderBoard();
+  }
+  function loadSharedLayout(){
+    return fetch('/api/layout', {cache:'no-store'}).then(function(r){ return r.json(); }).then(function(j){
+      var res = L.sanitizeLayout(j.layout);
+      BOARD.shared = res.layout; BOARD.notes = (j.notes||[]).concat(res.notes);
+      if(BOARD.personal){
+        var p = L.sanitizeLayout(BOARD.personal.layout);
+        BOARD.personal.layout = p.layout; BOARD.notes = BOARD.notes.concat(p.notes);
+      }
+      var n = $('#boardNotes'); n.hidden = !BOARD.notes.length; n.textContent = BOARD.notes.join(' ');
+      renderBoard();
+    });
+  }
+  window.addEventListener('resize', function(){ if(BOARD.shared) renderBoard(); });
+  loadSharedLayout().catch(function(e){ $('#boardNotes').hidden = false; $('#boardNotes').textContent = 'Layout could not be loaded ('+e.message+'); showing every widget.'; });
 
   /* ---------- tooltip ---------- */
   function pointFromEvent(ev){

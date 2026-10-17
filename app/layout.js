@@ -52,7 +52,17 @@
     // compact everything except that the moved item may not float above its target row by more than gaps allow
     return compact(out);
   }
-  function move(items, i, x, y) { var out = copy(items); out[i].x = x; out[i].y = y; clampItem(out[i]); return resolve(out, i); }
+  function move(items, i, x, y) {
+    var out = copy(items), orig = out[i].y;
+    out[i].x = x; out[i].y = y; clampItem(out[i]);
+    if (out[i].y > orig) {
+      // Moving down into a widget that sat below: jump past it, so compaction swaps them instead of floating the
+      // moved widget straight back to where it started.
+      var below = out.filter(function (o, k) { return k !== i && o.y > orig && collides(out[i], o); });
+      if (below.length) out[i].y = Math.max.apply(null, below.map(function (o) { return o.y + o.h; }));
+    }
+    return resolve(out, i);
+  }
   function resize(items, i, w, h) { var out = copy(items); out[i].w = w; out[i].h = h; clampItem(out[i]); return resolve(out, i); }
   function addWidget(items, type) {
     if (!WIDGETS[type]) throw new Error('unknown widget ' + type);

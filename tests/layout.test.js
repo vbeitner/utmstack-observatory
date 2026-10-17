@@ -77,3 +77,12 @@ test('screens: add, rename, move, remove (never the last one)', () => {
   assert.deepEqual(lay.screens.map(s => s.id), ['threats']);
   assert.throws(() => L.removeScreen(lay, 'threats'), /last screen/);
 });
+
+test('moving a widget down onto the one below swaps them (keyboard ArrowDown is not a no-op)', () => {
+  const ws = [W('kpis', 0, 0, 12, 4), W('donut', 8, 4, 4, 6), W('rules', 8, 10, 4, 8)];
+  const out = L.move(ws, 1, 8, 5);
+  const donut = out.find(i => i.type === 'donut'), rules = out.find(i => i.type === 'rules');
+  assert.ok(donut.y > rules.y, 'donut ends below rules');
+  assert.equal(rules.y, 4);
+  assert.ok(overlapFree(out));
+});

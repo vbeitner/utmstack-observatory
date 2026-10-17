@@ -1,5 +1,25 @@
 # Release notes
 
+## 1.3.1 — 2026-10-17
+
+**For users**
+- **Latest blocked inbound** rows (Live Firewall Map) are now clickable, not just hoverable: click one to see
+  WHOIS and live reputation (AbuseIPDB/VirusTotal) for that IP, the same panel alert detail already had. Hovering
+  still pans the map to the location; click for the deeper lookup.
+- Reports now include three more sections: an hourly events bar chart, the event-source-type breakdown, and
+  OpenSearch/host health (cluster status, CPU/memory/disk) — all from data the dashboard already computes, no
+  new OpenSearch load.
+
+**Technical**
+- `loadWhois()`/`loadReputation()` generalized to take an IP list instead of an alert object, so both
+  `VIEWS.alert` and the new `VIEWS.ip` (blocked-inbound rows) share one lookup path.
+- New `report_trend()` in `server.py` reads the local 24h-history SQLite table for the chart (the dashboard's
+  own "minutes" series only ever covers the last 60 minutes, too short for a daily report).
+- `reports.py`: hand-drawn bar charts via `fpdf2`'s own rect primitives for the PDF, an inline SVG for the HTML
+  — no new dependency. Fixed a state-leak bug caught in visual review: the chart's fill/draw color wasn't reset
+  afterward, bleeding blue into every table drawn below it.
+- Tests: 93 Python + 13 JS (updated fixtures/assertions for the new report fields).
+
 ## 1.3.0 — 2026-10-17
 
 **For users**

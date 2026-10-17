@@ -1,5 +1,32 @@
 # Release notes
 
+## 1.2.0 — 2026-10-17
+
+**For users**
+- **Screens.** Tabs under the header switch between screens. It starts with *Overview*, *Live map* and *Activity*. A
+  green dot marks the screens that the wall display rotates through.
+- **Move, resize, add and remove widgets.** Click **Edit** (right of the screen tabs): drag a widget by its *Move*
+  handle, resize it from its bottom-right corner, remove it with ✕, or add one with **+ Widget**. Other widgets make
+  room automatically. You can also add, rename, reorder and delete screens and choose which ones appear on the wall
+  (**On wall**). Keyboard: focus a widget's *Move* handle, then arrow keys move it and Shift+arrows resize it. Click
+  **Done** when finished.
+- **Your layout or everyone's.** Changes start as your personal layout in this browser. **Save as shared default**
+  makes it the layout everyone (and the wall screen) sees; **Reset to shared** goes back. If someone else changed the
+  shared layout in the meantime, you are told before anything is overwritten.
+- On screens narrower than 1100 pixels, widgets stack in one column and editing is switched off.
+- **Fixed: the "make OpenSearch green" commands now work as printed.** They were missing `sudo`, so Docker refused
+  them and nothing changed. They now read the OpenSearch password by themselves, run the data indices and OpenSearch's
+  own system indices as separate steps, and print OpenSearch's answer.
+
+**Technical**
+- New `GET/PUT /api/layout` (shared layout in `/data/layout.json` on the existing volume, versioned; writes need
+  `X-Observatory: 1` + JSON + same origin; 409 on a version conflict; the request body is always read before replying).
+- New `app/layout.js` (pure layout functions, `node --test tests/`) and `app/layout_store.py`.
+- CSP `script-src` now `'self' 'unsafe-inline'` to load `/layout.js`.
+- Cluster advice: `api_cluster().fix` is now `{patterns, steps:[{title, cmd}]}`; optional `STACK_NAME` env (default
+  `utmstack`).
+- Tests: 36 Python + 10 JavaScript.
+
 ## 1.1.2 — 2026-10-17
 
 **For users**

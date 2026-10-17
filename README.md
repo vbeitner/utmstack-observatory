@@ -10,6 +10,8 @@ A read-only operations dashboard for a UTMStack v11 SIEM. It reads UTMStack's ow
 - **Live Firewall Map**: animated arcs from every Sophos XG firewall to the cities it is talking to (outbound, inbound
   allowed, denied), top countries, and a ticker of the latest blocked inbound connections; 1 / 5 / 15 minute windows
 - **time-range picker** (1 h / 6 h / 24 h) for the counters, event-source donut, top alert rules and latest-alert list
+- **Movable widgets and named screens** (Edit button right of the screen tabs) with a shared default layout and
+  personal per-browser layouts
 - **Wall mode** for a NOC screen: full screen, client firewall names replaced by *Site A, Site B…*, rotating every 30 s
 
 Python standard library only. Runs as one container (a Docker Swarm service) next to UTMStack.
@@ -94,7 +96,7 @@ settings (`config.env`) and the history volume on every upgrade.
 The world outline `app/land.json` is generated from Natural Earth 1:110m land (public domain) via world-atlas 2.0.2:
 `python3 tools/build_land.py land-110m.json app/land.json` (download command in the script header).
 
-Tests (standard library only, OpenSearch stubbed): `python3 -m unittest discover -s tests -v`
+Tests (standard library only, OpenSearch stubbed): `python3 -m unittest discover -s tests -v` and `node --test tests/`
 
 ## What is stored where
 
@@ -103,6 +105,7 @@ Tests (standard library only, OpenSearch stubbed): `python3 -m unittest discover
 | 30-day hourly history + daily storage sizes | Docker volume `utmstack-observatory-data` (`/data/history.db`) |
 | Install settings | `/etc/utmstack-observatory/config.env` |
 | Dashboard password | `/etc/utmstack-observatory/admin.pass` |
+| Shared dashboard layout | Docker volume `utmstack-observatory-data` (`/data/layout.json`) |
 
 History starts when the dashboard is first installed. On a first run it also backfills event counts from UTMStack's ingest
 statistics (`v11-statistics-*`) for as far back as that index goes. Alerts and AI traffic cannot be backfilled.

@@ -14,7 +14,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import layout_store
 
-VERSION = "1.1.2"
+VERSION = "1.2.0"
 HERE = os.path.dirname(os.path.abspath(__file__))
 
 

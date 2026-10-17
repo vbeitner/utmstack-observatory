@@ -287,9 +287,10 @@ details.ev .kvt{margin:4px 0 8px}
 body.wall .shell{height:100dvh;min-height:0;grid-template-rows:72px minmax(0,1fr)}
 body.wall .shell>*{display:none}
 body.wall .shell>.hdr{display:grid}
-body.wall[data-view="map"] #mapPanel{display:flex}
+body.wall[data-view="map"] main.field{display:grid;grid-template-columns:1fr}
+body.wall[data-view="map"] .col-right{display:none}
 body.wall[data-view="trend"] .shell{grid-template-rows:72px 180px minmax(0,1fr)}
-body.wall[data-view="trend"] #kpiBand,body.wall[data-view="trend"] main.field{display:grid}
+body.wall[data-view="trend"] #kpiBand,body.wall[data-view="trend"] #trendRow{display:grid}
 body.wall #kSrcSec{visibility:hidden}
 body.wall .map-body{grid-template-columns:minmax(0,1fr) 380px}
 body.wall .map-stats .v{font-size:40px}
@@ -307,11 +308,15 @@ body.wall #rangeSeg,body.wall #trendsBtn,body.wall #mapWin{display:none}
 .map-body{grid-template-columns:minmax(0,1fr) 340px}
 .map-stats .k{white-space:nowrap;letter-spacing:.04em}
 .tk{grid-template-columns:72px minmax(0,1fr)}
-.shell{grid-template-rows:72px 178px minmax(360px,1fr) clamp(460px,64vh,780px) clamp(300px,40vh,480px)}
+.shell{grid-template-rows:72px 178px clamp(500px,68vh,820px) clamp(380px,46vh,540px) clamp(300px,40vh,480px)}
+.col-map{grid-template-rows:minmax(0,1fr)}
+.field{grid-template-columns:minmax(0,2.4fr) minmax(380px,1fr)}
+.col-map .map-body{grid-template-columns:minmax(0,1fr) 290px}
+.trend-row{display:grid;grid-template-rows:minmax(0,1fr) 78px;gap:12px;min-height:0}
 .num{font-size:clamp(44px,4.6vw,72px)}
 .kpi{padding:16px 22px 18px}
 @media (max-width:1599px){ .truth.opt,#trendUpdated{display:none} }
-@media (max-width:1099px){ .shell{grid-template-rows:auto auto auto minmax(520px,auto) auto} .hdr{grid-template-columns:1fr} }
+@media (max-width:1099px){ .shell{grid-template-rows:auto auto minmax(600px,auto) auto auto} .hdr{grid-template-columns:1fr} .trend-row{grid-template-rows:minmax(320px,auto) auto} }
 @media (prefers-reduced-motion:reduce){*,*::before,*::after{animation-duration:.001ms!important;transition-duration:.001ms!important}}
 </style>
 </head>
@@ -375,31 +380,31 @@ body.wall #rangeSeg,body.wall #trendsBtn,body.wall #mapWin{display:none}
   </section>
 
   <main class="field">
-    <div class="col col-left">
-      <section class="panel trend-panel" aria-labelledby="trendTitle">
-        <div class="panel-head">
-          <span class="panel-title" id="trendTitle">Real-time Event Trend</span>
-          <span class="panel-meta">Granularity 1 min · last 30 min</span>
-          <span class="panel-meta" id="trendUpdated"></span>
-          <span class="spacer"></span>
-          <div class="legend" role="group" aria-label="Series toggles">
-            <button class="lg" data-series="fail" aria-pressed="true"><i></i>Alerts (right)</button>
-            <button class="lg" data-series="total" aria-pressed="true"><i></i>Events</button>
-          </div>
-          <button class="txt-btn" id="expandBtn">View 60-minute detail</button>
+    <div class="col col-map">
+    <section class="panel map-panel" id="mapPanel" aria-labelledby="mapTitle">
+      <div class="panel-head">
+        <span class="panel-title" id="mapTitle">Live Firewall Map</span>
+        <span class="panel-meta" id="mapMeta">Connecting…</span>
+        <span class="spacer"></span>
+        <div class="seg" id="mapWin" role="group" aria-label="Map time window">
+          <button data-w="60" aria-pressed="true">1 min</button><button data-w="300" aria-pressed="false">5 min</button><button data-w="900" aria-pressed="false">15 min</button>
         </div>
-        <div class="chart-wrap" id="chartWrap">
-          <canvas id="trendCanvas" tabindex="0" role="img" aria-label="Events and alerts per minute, last 30 minutes. Press Enter for the 60-minute detail."></canvas>
-          <div class="tt" id="tooltip"></div>
-          <div class="annot"><i></i><span id="annotText"></span></div>
+      </div>
+      <div class="map-body">
+        <div class="map-wrap" id="mapWrap">
+          <canvas id="mapCanvas" role="img" aria-label="World map of firewall connections: arcs from each firewall to the remote cities it is talking to."></canvas>
+          <div class="tt" id="mapTip"></div>
+          <div class="map-legend" aria-hidden="true"><span><i style="background:#35E7FF"></i>Outbound</span><span><i style="background:#68F5B1"></i>Inbound allowed</span><span><i style="background:#FF4D5E"></i>Denied</span><span><i style="background:#EAF7FF;height:6px;width:6px;border-radius:50%"></i>Firewall</span></div>
         </div>
-        <p class="sr-only" id="trendSummary"></p>
-      </section>
-      <section class="panel spark-panel" aria-label="Event rate">
-        <div><div class="spark-label">EVENT RATE</div><div class="spark-value"><span id="epsNum">–</span><span class="unit">events/s</span></div></div>
-        <canvas class="spark-cv" id="sparkCanvas" role="img" aria-label="Event rate sparkline, last 60 minutes."></canvas>
-        <div class="spark-text" id="sparkText"></div>
-      </section>
+        <div class="map-side">
+          <div class="map-stats" id="mapStats"></div>
+          <div><h3>Top countries</h3><div id="mapCountries"><div class="map-note">Loading…</div></div></div>
+          <div><h3>Latest blocked inbound</h3><div id="mapTicker"><div class="map-note">Loading…</div></div></div>
+          <div class="map-note" id="mapNote"></div>
+        </div>
+      </div>
+      <p class="sr-only" id="mapSummary" aria-live="polite"></p>
+    </section>
     </div>
     <aside class="col col-right">
       <section class="panel" aria-labelledby="donutTitle">
@@ -421,29 +426,31 @@ body.wall #rangeSeg,body.wall #trendsBtn,body.wall #mapWin{display:none}
     </aside>
   </main>
 
-  <section class="panel map-panel" id="mapPanel" aria-labelledby="mapTitle">
-    <div class="panel-head">
-      <span class="panel-title" id="mapTitle">Live Firewall Map</span>
-      <span class="panel-meta" id="mapMeta">Connecting…</span>
-      <span class="spacer"></span>
-      <div class="seg" id="mapWin" role="group" aria-label="Map time window">
-        <button data-w="60" aria-pressed="true">1 min</button><button data-w="300" aria-pressed="false">5 min</button><button data-w="900" aria-pressed="false">15 min</button>
+  <section class="trend-row" id="trendRow" aria-label="Event trend">
+    <section class="panel trend-panel" aria-labelledby="trendTitle">
+      <div class="panel-head">
+        <span class="panel-title" id="trendTitle">Real-time Event Trend</span>
+        <span class="panel-meta">Granularity 1 min · last 30 min</span>
+        <span class="panel-meta" id="trendUpdated"></span>
+        <span class="spacer"></span>
+        <div class="legend" role="group" aria-label="Series toggles">
+          <button class="lg" data-series="fail" aria-pressed="true"><i></i>Alerts (right)</button>
+          <button class="lg" data-series="total" aria-pressed="true"><i></i>Events</button>
+        </div>
+        <button class="txt-btn" id="expandBtn">View 60-minute detail</button>
       </div>
-    </div>
-    <div class="map-body">
-      <div class="map-wrap" id="mapWrap">
-        <canvas id="mapCanvas" role="img" aria-label="World map of firewall connections: arcs from each firewall to the remote cities it is talking to."></canvas>
-        <div class="tt" id="mapTip"></div>
-        <div class="map-legend" aria-hidden="true"><span><i style="background:#35E7FF"></i>Outbound</span><span><i style="background:#68F5B1"></i>Inbound allowed</span><span><i style="background:#FF4D5E"></i>Denied</span><span><i style="background:#EAF7FF;height:6px;width:6px;border-radius:50%"></i>Firewall</span></div>
+      <div class="chart-wrap" id="chartWrap">
+        <canvas id="trendCanvas" tabindex="0" role="img" aria-label="Events and alerts per minute, last 30 minutes. Press Enter for the 60-minute detail."></canvas>
+        <div class="tt" id="tooltip"></div>
+        <div class="annot"><i></i><span id="annotText"></span></div>
       </div>
-      <div class="map-side">
-        <div class="map-stats" id="mapStats"></div>
-        <div><h3>Top countries</h3><div id="mapCountries"><div class="map-note">Loading…</div></div></div>
-        <div><h3>Latest blocked inbound</h3><div id="mapTicker"><div class="map-note">Loading…</div></div></div>
-        <div class="map-note" id="mapNote"></div>
-      </div>
-    </div>
-    <p class="sr-only" id="mapSummary" aria-live="polite"></p>
+      <p class="sr-only" id="trendSummary"></p>
+    </section>
+    <section class="panel spark-panel" aria-label="Event rate">
+      <div><div class="spark-label">EVENT RATE</div><div class="spark-value"><span id="epsNum">–</span><span class="unit">events/s</span></div></div>
+      <canvas class="spark-cv" id="sparkCanvas" role="img" aria-label="Event rate sparkline, last 60 minutes."></canvas>
+      <div class="spark-text" id="sparkText"></div>
+    </section>
   </section>
 
   <section class="bottom">
@@ -871,9 +878,13 @@ body.wall #rangeSeg,body.wall #trendsBtn,body.wall #mapWin{display:none}
   fetch('/land.json', {cache:'force-cache'}).then(function(r){ return r.json(); })
     .then(function(d){ LAND = d.rings; landCache = null; drawMap(performance.now()); }).catch(function(){});
 
-  function view(w, h){                         // equirectangular, lat 78°N..56°S, centred on the Atlantic side of Canada
-    var lonW = 360, latN = 78, latS = -56, s = Math.min(w/lonW, h/(latN-latS));
-    var ox = (w - lonW*s)/2, oy = (h - (latN-latS)*s)/2;
+  function view(w, h){
+    // Equirectangular, lat 78°N..56°S. In a tall slot the map zooms to fill the height, but always keeps at least
+    // 230° of longitude in view, centred on the Atlantic, so North America, Europe and Africa stay on screen.
+    var latN = 78, latSpan = 134, minLon = 230, lonC = -25;
+    var s = Math.min(Math.max(w/360, h/latSpan), w/minLon);
+    var c = w/s >= 360 ? 0 : lonC;
+    var ox = w/2 - (c+180)*s, oy = (h - latSpan*s)/2;
     return function(lon, lat){ return [ox + (lon+180)*s, oy + (latN-lat)*s]; };
   }
   function landLayer(w, h, d){

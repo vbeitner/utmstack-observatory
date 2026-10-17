@@ -1,5 +1,16 @@
 # Release notes
 
+## 1.1.1 — 2026-10-17
+
+**For users**
+- **The live map and the trend chart swapped places.** The Live Firewall Map now sits in the main row next to the
+  event-source donut and alert rules; the real-time event trend and event rate run full width underneath it.
+- The map zooms to fill its panel instead of leaving empty bands above and below the world: North America, Europe,
+  Africa and the Middle East stay in view, and the far Pacific is cropped at the edges in narrower panels.
+
+**Technical**
+- Layout change only (`app/index.html`); no API or configuration changes.
+
 ## 1.1.0 — 2026-10-17
 
 **For users**

@@ -12,7 +12,7 @@ import urllib.error, urllib.request
 from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-VERSION = "1.2.4"
+VERSION = "1.2.5"
 HERE = os.path.dirname(os.path.abspath(__file__))
 if HERE not in sys.path:                          # the container runs "python3 -I", which leaves this folder off sys.path
     sys.path.insert(0, HERE)
@@ -34,6 +34,8 @@ def secret(name):
 OS_URL = env("OS_URL").rstrip("/")             # e.g. https://node1:9200 ; empty = docker-exec transport
 OS_USER, OS_PASS = env("OS_USER"), secret("OS_PASS")
 DASH_USER, DASH_PASS = env("DASH_USER", "admin"), secret("DASH_PASS")
+ABUSEIPDB_KEY = secret("ABUSEIPDB_KEY")        # optional: enables live abuse-score lookups on alert IPs
+VIRUSTOTAL_KEY = secret("VIRUSTOTAL_KEY")      # optional: enables live vendor-detection lookups on alert IPs
 PORT = int(env("PORT", "8765"))
 BIND = env("BIND") or env("HOST") or ("0.0.0.0" if DASH_PASS else "127.0.0.1")
 TLS_CERT, TLS_KEY = env("TLS_CERT"), env("TLS_KEY")
@@ -282,12 +284,13 @@ def collect(hours=24):
         s = h["_source"]
         evs = s.get("events") or []
         ev0 = evs[0] if evs else {}
-        ip = ((s.get("adversary") or {}).get("ip") or (ev0.get("origin") or {}).get("ip")
-              or (s.get("target") or {}).get("ip") or "")
+        adv, tgt = s.get("adversary") or {}, s.get("target") or {}
+        origin = ev0.get("origin") or {}
+        ip, loc = alert_ip_loc(adv, origin, tgt)
         return {"id": h["_id"], "t": s.get("@timestamp"), "sev": s.get("severityLabel") or "Low",
                 "source": s.get("dataSource") or s.get("dataType") or "-", "name": s.get("name") or "-",
                 "status": s.get("statusLabel") or "Open", "desc": s.get("description") or "",
-                "affected": len(evs), "ip": ip}
+                "affected": len(evs), "ip": ip, "lat": loc[0], "lon": loc[1]}
 
     return {
         "now": datetime.now(timezone.utc).isoformat(),
@@ -626,14 +629,27 @@ def api_source(name):
     }
 
 
+def alert_ip_loc(*candidates):
+    """Pick the first candidate dict (adversary / event origin / target, in caller's preference order) that has
+    an ip, and return (ip, (lat, lon)) using that same dict's geolocation -- never mix an IP from one party with
+    another party's coordinates."""
+    for c in candidates:
+        ip = c.get("ip")
+        if ip:
+            g = c.get("geolocation") or {}
+            return ip, (g.get("latitude"), g.get("longitude"))
+    return "", (None, None)
+
+
 def alert_summary(h):
     s = h["_source"]
     evs = s.get("events") or []
     ev0 = evs[0] if evs else {}
-    ip = ((s.get("adversary") or {}).get("ip") or (ev0.get("origin") or {}).get("ip") or (s.get("target") or {}).get("ip") or "")
+    adv, tgt, origin = s.get("adversary") or {}, s.get("target") or {}, ev0.get("origin") or {}
+    ip, loc = alert_ip_loc(adv, origin, tgt)
     return {"id": h["_id"], "t": s.get("@timestamp"), "sev": s.get("severityLabel") or "Low", "name": s.get("name") or "-",
             "source": s.get("dataSource") or "-", "type": s.get("dataType") or "", "status": s.get("statusLabel") or "Open",
-            "ip": ip, "affected": len(evs), "category": s.get("category") or ""}
+            "ip": ip, "affected": len(evs), "category": s.get("category") or "", "lat": loc[0], "lon": loc[1]}
 
 
 def api_alerts(p):
@@ -837,6 +853,68 @@ def api_whois(ip):
     if len(_whois_cache) > 500:
         _whois_cache.clear()
     _whois_cache[key] = (time.time(), res)
+    return res
+
+
+# ---------------------------------------------------------------------------
+# IP reputation: AbuseIPDB and VirusTotal, each optional (ABUSEIPDB_KEY / VIRUSTOTAL_KEY), cached 24 h like WHOIS.
+# ---------------------------------------------------------------------------
+_reputation_cache = {}
+REPUTATION_TTL_S = 86400
+
+
+def _abuseipdb(ip):
+    if not ABUSEIPDB_KEY:
+        return {"configured": False}
+    req = urllib.request.Request(
+        "https://api.abuseipdb.com/api/v2/check?ipAddress=%s&maxAgeInDays=90" % ip,
+        headers={"Key": ABUSEIPDB_KEY, "Accept": "application/json", "User-Agent": "utmstack-observatory/1.0"})
+    try:
+        with urllib.request.urlopen(req, timeout=10) as r:
+            d = json.loads(r.read(200_000))["data"]
+    except Exception as e:
+        return {"configured": True, "error": "AbuseIPDB lookup failed: %s" % str(e)[:120]}
+    return {"configured": True, "score": d.get("abuseConfidenceScore"), "reports": d.get("totalReports"),
+            "distinct_reporters": d.get("numDistinctUsers"), "last_reported": d.get("lastReportedAt"),
+            "usage_type": d.get("usageType"), "isp": d.get("isp"), "domain": d.get("domain"),
+            "whitelisted": d.get("isWhitelisted")}
+
+
+def _virustotal(ip):
+    if not VIRUSTOTAL_KEY:
+        return {"configured": False}
+    req = urllib.request.Request("https://www.virustotal.com/api/v3/ip_addresses/%s" % ip,
+                                  headers={"x-apikey": VIRUSTOTAL_KEY, "User-Agent": "utmstack-observatory/1.0"})
+    try:
+        with urllib.request.urlopen(req, timeout=10) as r:
+            a = json.loads(r.read(500_000))["data"]["attributes"]
+    except Exception as e:
+        return {"configured": True, "error": "VirusTotal lookup failed: %s" % str(e)[:120]}
+    stats = a.get("last_analysis_stats") or {}
+    flagged = [v.get("result") for v in (a.get("last_analysis_results") or {}).values() if v.get("category") == "malicious"]
+    return {"configured": True, "malicious": stats.get("malicious", 0), "suspicious": stats.get("suspicious", 0),
+            "harmless": stats.get("harmless", 0), "undetected": stats.get("undetected", 0),
+            "reputation": a.get("reputation"), "as_owner": a.get("as_owner"), "country": a.get("country"),
+            "flagged_by": [x for x in flagged if x][:8]}
+
+
+def api_reputation(ip):
+    try:
+        addr = ipaddress.ip_address(ip.strip())
+    except ValueError:
+        return {"error": "not a valid IP address"}
+    key = str(addr)
+    hit = _reputation_cache.get(key)
+    if hit and time.time() - hit[0] < REPUTATION_TTL_S:
+        return hit[1]
+    if not addr.is_global:
+        res = {"ip": key, "private": True, "note": "Private, loopback or reserved address: no reputation to check."}
+        _reputation_cache[key] = (time.time(), res)
+        return res
+    res = {"ip": key, "abuseipdb": _abuseipdb(key), "virustotal": _virustotal(key)}
+    if len(_reputation_cache) > 500:
+        _reputation_cache.clear()
+    _reputation_cache[key] = (time.time(), res)
     return res
 
 
@@ -1065,7 +1143,8 @@ def build_geo(window):
     t = os_call(FW_SEARCH, {"size": 14, "sort": [{"@timestamp": "desc"}], "query": {"bool": {"filter": [
         span, {"term": {"actionResult.keyword": "denied"}}, has("origin.geolocation.latitude")]}},
         "_source": ["@timestamp", "origin.ip", "origin.geolocation.city", "origin.geolocation.country",
-                    "origin.geolocation.countryCode", "target.port", "protocol", "dataSource"]})
+                    "origin.geolocation.countryCode", "origin.geolocation.latitude", "origin.geolocation.longitude",
+                    "target.port", "protocol", "dataSource"]})
     a = r["aggregations"]
     total = r["hits"]["total"]["value"]
     denied, failed = _outcomes(a["outcome"]["buckets"])
@@ -1105,9 +1184,11 @@ def build_geo(window):
         s_ = h["_source"]
         o = s_.get("origin") or {}
         g = o.get("geolocation") or {}
+        lat, lon = g.get("latitude"), g.get("longitude")
         ticker.append({"t": s_.get("@timestamp"), "ip": o.get("ip"), "city": g.get("city"), "country": g.get("country"),
                        "cc": g.get("countryCode"), "port": (s_.get("target") or {}).get("port"),
-                       "proto": s_.get("protocol"), "site": _q(s_.get("dataSource"))})
+                       "proto": s_.get("protocol"), "site": _q(s_.get("dataSource")),
+                       "lat": round(lat, 3) if lat is not None else None, "lon": round(lon, 3) if lon is not None else None})
 
     newest = a["newest"].get("value")
     return {"window_s": window, "generated": datetime.now(timezone.utc).isoformat(),
@@ -1338,6 +1419,7 @@ class Handler(BaseHTTPRequestHandler):
             "/api/cluster": lambda: api_cluster(),
             "/api/storage": lambda: api_storage(),
             "/api/whois": lambda: api_whois(p.get("ip", "")[:64]),
+            "/api/reputation": lambda: api_reputation(p.get("ip", "")[:64]),
             "/api/support": lambda: api_support(p.get("anon") == "1"),
             "/api/geo": lambda: api_geo(int(p["window"]) if p.get("window", "").isdigit() else 60,
                                         p.get("anon") == "1"),

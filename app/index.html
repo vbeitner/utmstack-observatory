@@ -828,7 +828,8 @@ body.paused .mark-core,body.paused .tk.new,body.paused .live-dot{animation-play-
     var body = $('#alertBody');
     if(!al.length){ body.innerHTML = '<tr><td colspan="6" class="empty">No alerts in the last '+rl()+'.</td></tr>'; lastAlertsHtml = ''; $('#timeline').innerHTML = ''; return; }
     var html = al.slice(0,12).map(function(a){
-      return '<tr tabindex="0" data-id="'+esc(a.id)+'"><td class="t">'+hhmmss(new Date(a.t))+'</td>'+
+      var geo = a.lat!=null && a.lon!=null ? ' data-lat="'+a.lat+'" data-lon="'+a.lon+'" data-ip="'+esc(a.ip||'')+'" data-sub="'+esc(a.name||'')+'"' : '';
+      return '<tr tabindex="0" data-id="'+esc(a.id)+'"'+geo+'><td class="t">'+hhmmss(new Date(a.t))+'</td>'+
         '<td><span class="lvl '+lvlClass(a.sev)+'"><i class="d '+lvlDot(a.sev)+'"></i>'+esc(a.sev)+'</span></td>'+
         '<td class="svc" title="'+esc(a.source)+'">'+esc(a.source)+'</td><td title="'+esc(a.desc)+'">'+esc(a.name)+'</td>'+
         '<td class="impact">'+a.affected+'</td><td class="state">'+esc(a.status)+'</td></tr>';
@@ -936,7 +937,10 @@ body.paused .mark-core,body.paused .tk.new,body.paused .live-dot{animation-play-
   var mapCv = $('#mapCanvas'), mapTip = $('#mapTip'), mapWrap = $('#mapWrap');
   var LAND = null, G = null, mapWin = 60, mapAnon = false, mapHits = [], landCache = null, seenTicks = {};
   var reduceMotion = !!(window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches);
-  var C_OUT = '#35E7FF', C_IN = '#68F5B1', C_DENY = '#FF4D5E';
+  var C_OUT = '#35E7FF', C_IN = '#68F5B1', C_DENY = '#FF4D5E', C_PIN = '#FFC857';
+  var HOVER_ZOOM = 3.2;
+  var hoverPin = null;                             // {lat, lon, label} while a row with coordinates is hovered
+  var camX = 0, camY = 0, camZ = 1;                 // eased camera focus (base-projection pixels) and zoom
   fetch('/land.json', {cache:'force-cache'}).then(function(r){ return r.json(); })
     .then(function(d){ LAND = d.rings; landCache = null; drawMap(frameT()); }).catch(function(){});
 
@@ -982,12 +986,20 @@ body.paused .mark-core,body.paused .tk.new,body.paused .live-dot{animation-play-
     if(!mapCv.offsetParent) return;                     // panel hidden (wall mode on another view)
     var f = fit(mapCv), ctx = f.ctx, w = f.w, h = f.h, d = Math.min(window.devicePixelRatio||1,2);
     ctx.clearRect(0,0,w,h);
+    var P = view(w, h);
+    var tz = 1, tx = w/2, ty = h/2;
+    if(hoverPin && hoverPin.lat!=null && hoverPin.lon!=null){
+      var fp = P(hoverPin.lon, hoverPin.lat); tz = HOVER_ZOOM; tx = fp[0]; ty = fp[1];
+    }
+    if(liveOn){ camZ += (tz-camZ)*.15; camX += (tx-camX)*.15; camY += (ty-camY)*.15; }
+    else { camZ = tz; camX = tx; camY = ty; }
+    ctx.save(); ctx.translate(w/2, h/2); ctx.scale(camZ, camZ); ctx.translate(-camX, -camY);
     ctx.drawImage(landLayer(w,h,d), 0, 0, w, h);
-    if(!G || !G.sites) return;
-    var P = view(w, h), byId = {}, maxC = 1, t = (now||0)/1000;
+    if(!G || !G.sites){ ctx.restore(); return; }
+    var byId = {}, maxC = 1, t = (now||0)/1000;
     G.sites.forEach(function(s){ byId[s.id] = s; s._p = P(s.lon, s.lat); });
     G.arcs.forEach(function(a){ if(a.count>maxC) maxC = a.count; });
-    mapHits = [];
+    if(!hoverPin) mapHits = [];                          // zoomed/panned: screen-space hit-testing below would be wrong
     var ends = {};
     G.arcs.forEach(function(a, i){
       var s = byId[a.site]; if(!s) return;
@@ -998,37 +1010,44 @@ body.paused .mark-core,body.paused .tk.new,body.paused .live-dot{animation-play-
       if(dx*dx+dy*dy < 9) return;                        // same metro area: endpoint dot only
       var c = ctrl(p0, p1);
       ctx.beginPath(); ctx.moveTo(p0[0],p0[1]); ctx.quadraticCurveTo(c[0],c[1],p1[0],p1[1]);
-      ctx.strokeStyle = hexA(col, .16 + .34*wgt); ctx.lineWidth = .6 + 1.8*wgt; ctx.stroke();
+      ctx.strokeStyle = hexA(col, .16 + .34*wgt); ctx.lineWidth = (.6 + 1.8*wgt)/camZ; ctx.stroke();
       if(!reduceMotion){                                 // comet travels in the direction the connection was made
         var speed = .18 + .5*wgt, ph = ((i*0.6180339) % 1), k = (t*speed + ph) % 1;
         var from = a.dir==='in' ? p1 : p0, to = a.dir==='in' ? p0 : p1;
         for(var j=0;j<5;j++){
           var kk = Math.max(0, k - j*.025), q = bez(from, to, c, kk);
-          ctx.beginPath(); ctx.arc(q[0], q[1], (2.2+1.6*wgt)*(1-j*.18), 0, Math.PI*2);
+          ctx.beginPath(); ctx.arc(q[0], q[1], (2.2+1.6*wgt)*(1-j*.18)/camZ, 0, Math.PI*2);
           ctx.fillStyle = hexA(col, (.9 - j*.18)); ctx.fill();
         }
       }
     });
     Object.keys(ends).forEach(function(k){                // remote endpoints
-      var e = ends[k], col = e.denied*2 >= e.count ? C_DENY : C_OUT, r = 1.6 + 3.2*Math.log(1+e.count)/Math.log(1+maxC);
+      var e = ends[k], col = e.denied*2 >= e.count ? C_DENY : C_OUT, r = (1.6 + 3.2*Math.log(1+e.count)/Math.log(1+maxC))/camZ;
       if(e.denied && !reduceMotion){
         var pulse = (t*.9 + (e.p[0]%7)/7) % 1;
-        ctx.beginPath(); ctx.arc(e.p[0], e.p[1], r + pulse*14, 0, Math.PI*2);
-        ctx.strokeStyle = hexA(C_DENY, .55*(1-pulse)); ctx.lineWidth = 1.2; ctx.stroke();
+        ctx.beginPath(); ctx.arc(e.p[0], e.p[1], r + pulse*14/camZ, 0, Math.PI*2);
+        ctx.strokeStyle = hexA(C_DENY, .55*(1-pulse)); ctx.lineWidth = 1.2/camZ; ctx.stroke();
       }
       ctx.beginPath(); ctx.arc(e.p[0], e.p[1], r, 0, Math.PI*2); ctx.fillStyle = hexA(col, .85); ctx.fill();
-      mapHits.push({x:e.p[0], y:e.p[1], r:Math.max(7,r+3), kind:'remote', e:e});
+      if(!hoverPin) mapHits.push({x:e.p[0], y:e.p[1], r:Math.max(7,r+3), kind:'remote', e:e});
     });
     G.sites.forEach(function(s){                          // firewalls on top
-      var p = s._p, busy = s.total ? Math.min(1, Math.log(1+s.total)/Math.log(1+3000)) : 0, r = 3.5 + 3*busy;
+      var p = s._p, busy = s.total ? Math.min(1, Math.log(1+s.total)/Math.log(1+3000)) : 0, r = (3.5 + 3*busy)/camZ;
       if(!reduceMotion && s.total){
         var pl = (t*.6 + (p[1]%5)/5) % 1;
-        ctx.beginPath(); ctx.arc(p[0], p[1], r + pl*18, 0, Math.PI*2); ctx.strokeStyle = 'rgba(234,247,255,'+(.4*(1-pl))+')'; ctx.lineWidth = 1; ctx.stroke();
+        ctx.beginPath(); ctx.arc(p[0], p[1], r + pl*18/camZ, 0, Math.PI*2); ctx.strokeStyle = 'rgba(234,247,255,'+(.4*(1-pl))+')'; ctx.lineWidth = 1/camZ; ctx.stroke();
       }
-      ctx.beginPath(); ctx.arc(p[0], p[1], r+3, 0, Math.PI*2); ctx.fillStyle = 'rgba(53,231,255,.18)'; ctx.fill();
+      ctx.beginPath(); ctx.arc(p[0], p[1], r+3/camZ, 0, Math.PI*2); ctx.fillStyle = 'rgba(53,231,255,.18)'; ctx.fill();
       ctx.beginPath(); ctx.arc(p[0], p[1], r, 0, Math.PI*2); ctx.fillStyle = s.total ? '#EAF7FF' : '#8299AB'; ctx.fill();
-      mapHits.push({x:p[0], y:p[1], r:Math.max(9,r+4), kind:'site', s:s});
+      if(!hoverPin) mapHits.push({x:p[0], y:p[1], r:Math.max(9,r+4), kind:'site', s:s});
     });
+    ctx.restore();
+    if(hoverPin){                                         // the focus point rides toward screen centre as the camera eases in
+      var mx = w/2 + camZ*(tx-camX), my = h/2 + camZ*(ty-camY), pulse2 = ((now||0)/1000*1.1) % 1;
+      ctx.beginPath(); ctx.arc(mx, my, 6+pulse2*18, 0, Math.PI*2); ctx.strokeStyle = hexA(C_PIN, .85*(1-pulse2)); ctx.lineWidth = 2; ctx.stroke();
+      ctx.beginPath(); ctx.arc(mx, my, 5, 0, Math.PI*2); ctx.fillStyle = C_PIN; ctx.fill();
+      positionPinTip(mx, my);
+    }
   }
   function mapLoop(now){ if(liveOn) drawMap(now); if(!reduceMotion) requestAnimationFrame(mapLoop); }
   requestAnimationFrame(mapLoop);
@@ -1053,7 +1072,8 @@ body.paused .mark-core,body.paused .tk.new,body.paused .live-dot{animation-play-
     $('#mapTicker').innerHTML = g.ticker.length ? g.ticker.slice(0,10).map(function(x){
       var key = x.t+x.ip, isNew = !seenTicks[key]; fresh[key] = 1;
       var where = [x.city, x.country].filter(Boolean).join(', ') || x.cc || '';
-      return '<div class="tk'+(isNew && Object.keys(seenTicks).length ? ' new' : '')+'"><span class="t">'+hhmmss(new Date(x.t))+'</span>'+
+      var geo = x.lat!=null && x.lon!=null ? ' data-lat="'+x.lat+'" data-lon="'+x.lon+'" data-ip="'+esc(x.ip||'')+'" data-sub="'+esc(where+' → '+x.site)+'"' : '';
+      return '<div class="tk'+(isNew && Object.keys(seenTicks).length ? ' new' : '')+'"'+geo+'><span class="t">'+hhmmss(new Date(x.t))+'</span>'+
         '<span class="w"><span class="ip">'+esc(x.ip)+'</span> '+flag(x.cc)+' '+esc(where)+' → '+esc(x.site)+(x.port?' :'+esc(x.port):'')+'</span></div>';
     }).join('') : '<div class="map-note">No blocked inbound connections in the last '+winLbl+'.</div>';
     seenTicks = fresh;
@@ -1078,6 +1098,7 @@ body.paused .mark-core,body.paused .tk.new,body.paused .live-dot{animation-play-
     mapWin = +b.dataset.w; $$('#mapWin button').forEach(function(x){ x.setAttribute('aria-pressed', String(x===b)); }); pollGeo();
   }); });
   mapCv.addEventListener('mousemove', function(ev){
+    if(hoverPin) return;                               // a hovered row owns the tooltip and the camera right now
     var r = mapCv.getBoundingClientRect(), x = ev.clientX-r.left, y = ev.clientY-r.top, best = null, bd = 1e9;
     mapHits.forEach(function(hh){ var dx=hh.x-x, dy=hh.y-y, dd=dx*dx+dy*dy; if(dd < hh.r*hh.r && dd < bd){ bd = dd; best = hh; } });
     if(!best){ mapTip.classList.remove('on'); return; }
@@ -1094,7 +1115,33 @@ body.paused .mark-core,body.paused .tk.new,body.paused .live-dot{animation-play-
     var tw = mapTip.offsetWidth, th = mapTip.offsetHeight;
     mapTip.style.left = Math.min(r.width-tw-6, x+14)+'px'; mapTip.style.top = Math.max(6, Math.min(r.height-th-6, y-th-8))+'px';
   });
-  mapCv.addEventListener('mouseleave', function(){ mapTip.classList.remove('on'); });
+  mapCv.addEventListener('mouseleave', function(){ if(!hoverPin) mapTip.classList.remove('on'); });
+
+  /* ---- hover a Latest-Alerts or Latest-blocked-inbound row: zoom the map to its location ---- */
+  function positionPinTip(mx, my){
+    var r = mapCv.getBoundingClientRect(), tw = mapTip.offsetWidth, th = mapTip.offsetHeight;
+    mapTip.style.left = Math.max(6, Math.min(r.width-tw-6, mx+14))+'px';
+    mapTip.style.top = Math.max(6, Math.min(r.height-th-6, my-th-8))+'px';
+  }
+  function pinOn(lat, lon, label){
+    if(isNaN(lat) || isNaN(lon)) return;
+    hoverPin = {lat:lat, lon:lon};
+    mapTip.innerHTML = label; mapTip.classList.add('on');
+    if(!liveOn || reduceMotion) drawMap(frameT());       // snap at once when nothing else is driving redraws
+  }
+  function pinOff(){
+    if(!hoverPin) return;
+    hoverPin = null; mapTip.classList.remove('on');
+    if(!liveOn || reduceMotion) drawMap(frameT());
+  }
+  function rowPin(el){
+    var label = '<b style="color:#EAF7FF">'+esc(el.dataset.ip||el.dataset.sub||'')+'</b>'+(el.dataset.sub?'<br>'+esc(el.dataset.sub):'');
+    pinOn(parseFloat(el.dataset.lat), parseFloat(el.dataset.lon), label);
+  }
+  $('#alertBody').addEventListener('mouseover', function(e){ var tr = e.target.closest('tr[data-lat]'); if(tr) rowPin(tr); });
+  $('#alertBody').addEventListener('mouseout', function(e){ var tr = e.target.closest('tr[data-lat]'); if(tr && !tr.contains(e.relatedTarget)) pinOff(); });
+  $('#mapTicker').addEventListener('mouseover', function(e){ var tk = e.target.closest('.tk[data-lat]'); if(tk) rowPin(tk); });
+  $('#mapTicker').addEventListener('mouseout', function(e){ var tk = e.target.closest('.tk[data-lat]'); if(tk && !tk.contains(e.relatedTarget)) pinOff(); });
 
   /* ---------- wall display mode ---------- */
   var wallOn = false, wallTimer = null, wallIdx = 0, preWallScreen = null;
@@ -1738,6 +1785,8 @@ body.paused .mark-core,body.paused .tk.new,body.paused .live-dot{animation-play-
       html += '<h3 class="tl-title">Details</h3>'+kvTable(facts);
       var ips = alertIps(a);
       if(ips.length){
+        html += '<h3 class="tl-title">Reputation <span class="panel-meta">AbuseIPDB &amp; VirusTotal · cached 24 h</span></h3>';
+        html += ips.map(function(x,i){ return '<div class="note-card whois" id="rep'+i+'"><b>'+esc(x.ip)+'</b> <span class="tag">'+esc(x.role)+'</span><br>Looking up…</div>'; }).join('');
         html += '<h3 class="tl-title">WHOIS <span class="panel-meta">RDAP via rdap.org · public IPs only · cached 24 h</span></h3>';
         html += ips.map(function(x,i){ return '<div class="note-card whois" id="whois'+i+'"><b>'+esc(x.ip)+'</b> <span class="tag">'+esc(x.role)+'</span><br>Looking up…</div>'; }).join('');
       }
@@ -1749,9 +1798,46 @@ body.paused .mark-core,body.paused .tk.new,body.paused .live-dot{animation-play-
           kvTable(e, ['raw'])+(e.raw?'<pre>'+esc(e.raw)+'</pre>':'')+'</details>';
       }).join('') || '<div class="ai-note">No event data stored on this alert.</div>';
       digBody.innerHTML = html;
+      loadReputation(a, live);
       loadWhois(a, live);
     }).catch(function(e){ if(live()) failed(e); });
   };
+
+  /* ---- live reputation (AbuseIPDB / VirusTotal) for the IPs on an alert ---- */
+  function repCard(x, d){
+    var head = '<b>'+esc(x.ip)+'</b> <span class="tag">'+esc(x.role)+'</span>';
+    if(d.error) return head+'<br>'+esc(d.error);
+    if(d.private) return head+'<br>'+esc(d.note);
+    var ab = d.abuseipdb || {}, vt = d.virustotal || {}, parts = [];
+    if(ab.configured === false) parts.push('<div class="ai-note">AbuseIPDB not configured (set ABUSEIPDB_KEY).</div>');
+    else if(ab.error) parts.push('<div class="ai-note">AbuseIPDB: '+esc(ab.error)+'</div>');
+    else {
+      var scoreCol = ab.score>=50 ? '#FF4D5E' : (ab.score>=10 ? '#FFC857' : '#68F5B1');
+      parts.push('<table class="cmp kvt"><tbody>'+
+        '<tr><td>AbuseIPDB score</td><td><span style="color:'+scoreCol+'">'+(ab.score!=null?ab.score+'/100':'–')+'</span></td></tr>'+
+        (ab.reports?'<tr><td>Reports</td><td>'+nf0.format(ab.reports)+' from '+nf0.format(ab.distinct_reporters||0)+' reporters</td></tr>':'')+
+        (ab.usage_type?'<tr><td>Usage type</td><td>'+esc(ab.usage_type)+'</td></tr>':'')+
+        (ab.isp?'<tr><td>ISP</td><td>'+esc(ab.isp)+'</td></tr>':'')+'</tbody></table>');
+    }
+    if(vt.configured === false) parts.push('<div class="ai-note">VirusTotal not configured (set VIRUSTOTAL_KEY).</div>');
+    else if(vt.error) parts.push('<div class="ai-note">VirusTotal: '+esc(vt.error)+'</div>');
+    else {
+      parts.push('<table class="cmp kvt"><tbody>'+
+        '<tr><td>VirusTotal</td><td><span style="color:'+((vt.malicious||0)>0?'#FF4D5E':'#68F5B1')+'">'+(vt.malicious||0)+' malicious</span> / '+(vt.suspicious||0)+' suspicious / '+(vt.harmless||0)+' harmless</td></tr>'+
+        ((vt.flagged_by||[]).length?'<tr><td>Flagged as</td><td>'+vt.flagged_by.map(esc).join(', ')+'</td></tr>':'')+
+        (vt.as_owner?'<tr><td>Network</td><td>'+esc(vt.as_owner)+(vt.country?' · '+esc(vt.country):'')+'</td></tr>':'')+'</tbody></table>');
+    }
+    return head+parts.join('');
+  }
+  function loadReputation(a, live){
+    alertIps(a).reduce(function(chain, x, i){
+      return chain.then(function(){
+        var box = $('#rep'+i); if(!box || !live()) return;
+        return api('/api/reputation', {ip:x.ip}).then(function(d){ if(live() && $('#rep'+i)) $('#rep'+i).innerHTML = repCard(x, d); })
+          .catch(function(e){ if(live() && $('#rep'+i)) $('#rep'+i).innerHTML = repCard(x, {error:e.message}); });
+      });
+    }, Promise.resolve());
+  }
 
   /* ---- WHOIS (RDAP) for the IPs on an alert ---- */
   var IP_RE = /^(\d{1,3}(\.\d{1,3}){3}|[0-9a-fA-F]*:[0-9a-fA-F:]+)$/;

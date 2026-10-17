@@ -1,5 +1,18 @@
 # Release notes
 
+## 1.2.2 — 2026-10-17
+
+**For users**
+- **Pause now freezes the screen but keeps collecting.** Clicking **Live** to pause stops every animation (the map's
+  moving dots and pulses, the logo and the live dot) and holds all numbers and charts as they were. In the background
+  the dashboard keeps fetching new data; the status shows how many updates have been collected. Clicking again shows
+  the newest data at once and carries on live. Wall-mode rotation also pauses.
+- Previously, pausing stopped fetching altogether, so nothing was collected while paused.
+
+**Technical**
+- `poll()` / `pollGeo()` keep running while paused and hold the newest answers; the map's animation loop stops on the
+  paused frame (`frameT()`); the 60 s shared-layout refresh and wall rotation skip while paused. No server changes.
+
 ## 1.2.1 — 2026-10-17
 
 **For users**

@@ -347,6 +347,7 @@ body.editing .edit-bar{display:flex}
 .kpi{padding:16px 22px 18px}
 @media (max-width:1599px){ .truth.opt,#trendUpdated{display:none} }
 @media (max-width:1099px){ .hdr{grid-template-columns:1fr} }
+body.paused .mark-core,body.paused .tk.new,body.paused .live-dot{animation-play-state:paused}
 @media (prefers-reduced-motion:reduce){*,*::before,*::after{animation-duration:.001ms!important;transition-duration:.001ms!important}}
 </style>
 </head>
@@ -890,7 +891,8 @@ body.editing .edit-bar{display:flex}
     if(!liveOn){ dot.className = 'live-dot paused'; }
     else if(err){ dot.className = 'live-dot err'; }
     else dot.className = 'live-dot';
-    $('#statusText').textContent = !liveOn ? 'Feed paused · PAUSED' : (err ? (hasData ? 'Stale · '+err.slice(0,60) : 'Error · '+err.slice(0,60)) : 'Running · LIVE');
+    if(!liveOn) pausedStatus();                     // paused: re-render the frozen data (resize, screen switch), never new data
+    else $('#statusText').textContent = err ? (hasData ? 'Stale · '+err.slice(0,60) : 'Error · '+err.slice(0,60)) : 'Running · LIVE';
     if(!hasData) return;
     points = data.minutes.map(function(m){return {t:new Date(m.t), total:m.events, fail:m.alerts}});
     var now = new Date(data.now);
@@ -902,10 +904,19 @@ body.editing .edit-bar{display:flex}
   }
 
   /* ---------- polling ---------- */
+  /* Pause freezes the display only: the feeds keep polling in the background and the newest answers are held
+     (pendingD / pendingG), then shown at once on resume. */
+  var pendingD = null, pendingG = null, heldUpdates = 0, pauseT = 0;
+  function frameT(){ return liveOn ? performance.now() : pauseT; }   // a frozen map redraws at the moment it was paused
+  function pausedStatus(){
+    $('#statusText').textContent = 'Paused · display frozen · ' + (heldUpdates ? heldUpdates+' update'+(heldUpdates===1?'':'s')+' collected in the background' : 'still collecting in the background');
+  }
   function poll(){
-    if(!liveOn) return;
     fetch('/api/data?range='+RANGE, {cache:'no-store'}).then(function(r){ if(!r.ok) throw new Error('HTTP '+r.status); return r.json(); })
-      .then(apply).catch(function(e){ apply(Object.assign({}, D||{}, {error:'server unreachable ('+e.message+')'})); });
+      .then(function(d){
+        if(liveOn) return apply(d);
+        if(!d.range_h || d.range_h === RANGE){ pendingD = d; heldUpdates++; pausedStatus(); }
+      }).catch(function(e){ if(liveOn) apply(Object.assign({}, D||{}, {error:'server unreachable ('+e.message+')'})); });
   }
   setInterval(poll, 3000);
 
@@ -927,7 +938,7 @@ body.editing .edit-bar{display:flex}
   var reduceMotion = !!(window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches);
   var C_OUT = '#35E7FF', C_IN = '#68F5B1', C_DENY = '#FF4D5E';
   fetch('/land.json', {cache:'force-cache'}).then(function(r){ return r.json(); })
-    .then(function(d){ LAND = d.rings; landCache = null; drawMap(performance.now()); }).catch(function(){});
+    .then(function(d){ LAND = d.rings; landCache = null; drawMap(frameT()); }).catch(function(){});
 
   function view(w, h){
     // Equirectangular, lat 78°N..56°S. In a tall slot the map zooms to fill the height, but always keeps at least
@@ -1019,9 +1030,9 @@ body.editing .edit-bar{display:flex}
       mapHits.push({x:p[0], y:p[1], r:Math.max(9,r+4), kind:'site', s:s});
     });
   }
-  function mapLoop(now){ drawMap(now); if(!reduceMotion) requestAnimationFrame(mapLoop); }
+  function mapLoop(now){ if(liveOn) drawMap(now); if(!reduceMotion) requestAnimationFrame(mapLoop); }
   requestAnimationFrame(mapLoop);
-  window.addEventListener('resize', function(){ landCache = null; drawMap(performance.now()); });
+  window.addEventListener('resize', function(){ landCache = null; drawMap(frameT()); });
 
   function flag(cc){ return /^[A-Z]{2}$/.test(cc||'') ? String.fromCodePoint(127397+cc.charCodeAt(0), 127397+cc.charCodeAt(1)) : '·'; }
   function renderMapSide(){
@@ -1055,10 +1066,10 @@ body.editing .edit-bar{display:flex}
     $('#mapSummary').textContent = nf0.format(g.per_min)+' firewall connections per minute, '+dr.toFixed(1)+'% denied. Top country: '+(g.countries[0] ? g.countries[0].country : 'none')+'.';
   }
   function pollGeo(){
-    if(!liveOn) return;
     fetch('/api/geo?window='+mapWin+(mapAnon?'&anon=1':''), {cache:'no-store'}).then(function(r){ return r.json(); }).then(function(g){
       if(g.error){ $('#mapMeta').textContent = 'Map unavailable: '+g.error.slice(0,80); return; }
       if(!!g.anonymized !== mapAnon || g.window_s !== mapWin) return;   // stale answer after a toggle
+      if(!liveOn){ pendingG = g; return; }
       G = g; renderMapSide(); if(reduceMotion) drawMap(0);
     }).catch(function(e){ $('#mapMeta').textContent = 'Map unreachable ('+e.message+')'; });
   }
@@ -1092,6 +1103,7 @@ body.editing .edit-bar{display:flex}
     return ids.length ? ids : (BOARD.shared ? [BOARD.shared.screens[0].id] : []);
   }
   function wallStep(){
+    if(!liveOn) return;
     var ids = wallScreens(); if(!ids.length) return;
     wallIdx = wallIdx % ids.length; showScreen(ids[wallIdx]); wallIdx++;
   }
@@ -1139,7 +1151,7 @@ body.editing .edit-bar{display:flex}
     });
     $$('#board > [data-widget]').forEach(function(el){ if(!on[el.dataset.widget]) el.hidden = true; });
     renderTabs();
-    setTimeout(function(){ landCache = null; if(D) apply(D); drawMap(performance.now()); }, 30);   // canvases resize to the new cells
+    setTimeout(function(){ landCache = null; if(D) apply(D); drawMap(frameT()); }, 30);   // canvases resize to the new cells
   }
   function showScreen(id){
     BOARD.screenId = id; try { localStorage.setItem('obsScreen', id); } catch(e){}
@@ -1310,7 +1322,7 @@ body.editing .edit-bar{display:flex}
       if(confirm(q)) saveAsShared();
     });
   }
-  setInterval(function(){ if(!editing) loadSharedLayout().catch(function(){}); }, 60000);
+  setInterval(function(){ if(!editing && liveOn) loadSharedLayout().catch(function(){}); }, 60000);
 
   loadSharedLayout().catch(function(e){ $('#boardNotes').hidden = false; $('#boardNotes').textContent = 'Layout could not be loaded ('+e.message+'); showing every widget.'; });
 
@@ -1985,7 +1997,15 @@ body.editing .edit-bar{display:flex}
   $('#liveBtn').addEventListener('click', function(){
     liveOn = !liveOn; this.setAttribute('aria-pressed', String(liveOn));
     $('#liveBtnText').textContent = liveOn ? 'Live' : 'Paused';
-    if(liveOn) poll(); else { $('#liveDot').className = 'live-dot paused'; $('#statusText').textContent = 'Feed paused · PAUSED'; }
+    document.body.classList.toggle('paused', !liveOn);
+    if(liveOn){                                     // resume: show everything collected while paused, then carry on live
+      var d = pendingD, g = pendingG; pendingD = pendingG = null; heldUpdates = 0;
+      if(g){ G = g; renderMapSide(); }
+      if(d) apply(d); else if(D) apply(D);
+      poll(); pollGeo();
+    } else {
+      pauseT = performance.now(); $('#liveDot').className = 'live-dot paused'; pausedStatus();
+    }
   });
   $('#fsBtn').addEventListener('click', function(){
     if(!document.fullscreenElement && document.documentElement.requestFullscreen) document.documentElement.requestFullscreen();

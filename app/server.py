@@ -12,7 +12,7 @@ import urllib.error, urllib.request
 from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-VERSION = "1.0.0"
+VERSION = "1.1.0"
 HERE = os.path.dirname(os.path.abspath(__file__))
 
 
@@ -218,9 +218,13 @@ def ai_traffic():
     }
 
 
-def collect():
+RANGES_H = (1, 6, 24)                           # selectable dashboard windows; 24 h is the live default
+
+
+def collect(hours=24):
+    span = "now-%dh" % hours
     logs = os_call("/v11-log-*/_search", {
-        "size": 0, "track_total_hits": True, "query": rng("now-24h"),
+        "size": 0, "track_total_hits": True, "query": rng(span),
         "aggs": {
             "types": {"terms": {"field": "dataType.keyword", "size": 8}},
             "ds": {"terms": {"field": "dataSource.keyword", "size": 200},
@@ -229,9 +233,9 @@ def collect():
             "recent": minute_hist(),
             "latest": {"max": {"field": "@timestamp"}},
         }})
-    prev = os_call("/v11-log-*/_count", {"query": rng("now-48h", "now-24h")})
+    prev = os_call("/v11-log-*/_count", {"query": rng("now-%dh" % (2 * hours), span)})
     alerts = os_call("/v11-alert-*/_search", {
-        "size": 14, "track_total_hits": True, "query": rng("now-24h"), "sort": [{"@timestamp": "desc"}],
+        "size": 14, "track_total_hits": True, "query": rng(span), "sort": [{"@timestamp": "desc"}],
         "_source": ["@timestamp", "name", "severityLabel", "dataSource", "dataType", "statusLabel",
                     "description", "events", "target", "adversary"],
         "aggs": {
@@ -256,9 +260,10 @@ def collect():
     keys = keys[-60:]
     minutes = [{"t": k, "events": ev_min.get(k, 0), "alerts": al_min.get(k, 0)} for k in keys]
 
-    _state["ds"] = [{"name": b["key"], "docs": b["doc_count"], "last": b["last"].get("value") or 0,
-                     "type": (b["types"]["buckets"][0]["key"] if b["types"]["buckets"] else "")}
-                    for b in logs["aggregations"]["ds"]["buckets"]]
+    if hours == 24:                              # the source list behind the drill-downs is always 24 h
+        _state["ds"] = [{"name": b["key"], "docs": b["doc_count"], "last": b["last"].get("value") or 0,
+                         "type": (b["types"]["buckets"][0]["key"] if b["types"]["buckets"] else "")}
+                        for b in logs["aggregations"]["ds"]["buckets"]]
     stale_cut = (now - 600) * 1000
     ds = logs["aggregations"]["ds"]["buckets"]
     online = [b for b in ds if (b["last"].get("value") or 0) >= stale_cut]
@@ -281,6 +286,7 @@ def collect():
 
     return {
         "now": datetime.now(timezone.utc).isoformat(),
+        "range_h": hours,
         "minutes": minutes,
         "kpi": {
             "sources_online": len(online), "sources_total": len(ds), "sources_stale": stale[:6],
@@ -897,6 +903,233 @@ def api_cluster():
             "notes": notes, "fix": fix}
 
 
+# ---------------------------------------------------------------- live firewall map
+# Arcs between each firewall and the remote cities it talks to, from Sophos XG logs. UTMStack already
+# geolocates public IPs (origin/target.geolocation), so no GeoIP database or outside lookup is needed.
+FW_SEARCH = "/v11-log-firewall-sophos-xg-*/_search"
+GEO_WINDOWS_S = (60, 300, 900)
+GEO_TTL_S = 10                                   # one shared query per 10 s, however many viewers
+SITE_TTL_S = 1800                                # re-check firewall locations every 30 min
+MAX_ARCS = 200
+
+
+def parse_loc(text):
+    """'lat,lon[,label]' -> {"lat", "lon", "city"} or None."""
+    parts = [x.strip() for x in (text or "").split(",")]
+    try:
+        lat, lon = float(parts[0]), float(parts[1])
+    except (ValueError, IndexError):
+        return None
+    if not (-90 <= lat <= 90 and -180 <= lon <= 180):
+        return None
+    return {"lat": lat, "lon": lon, "city": ",".join(parts[2:]).strip() or None}
+
+
+def parse_sites(text):
+    """SITE_LOCATIONS='Name=lat,lon,City;1.2.3.4=lat,lon' -> {name or ip: loc}."""
+    out = {}
+    for item in (text or "").split(";"):
+        key, _, loc = item.partition("=")
+        loc = parse_loc(loc)
+        if key.strip() and loc:
+            out[key.strip()] = loc
+    return out
+
+
+HOME = parse_loc(env("HOME_LOCATION")) or {"lat": 43.6532, "lon": -79.3832, "city": "Toronto"}
+SITE_OVERRIDES = parse_sites(env("SITE_LOCATIONS"))
+_geo_cache = {}
+_geo_lock = threading.Lock()
+_sites = {"t": 0, "list": []}
+_located = {}                                    # firewall WAN IP -> (checked_at, loc or None)
+
+
+def _q(v):
+    return str(v or "").strip().strip('"')
+
+
+def _locate_ip(ip):
+    """Find UTMStack's own geolocation for an address anywhere in the indices."""
+    hit = _located.get(ip)
+    if hit and (hit[1] or time.time() - hit[0] < SITE_TTL_S):
+        return hit[1]
+    loc = None
+    for side in ("origin", "target"):
+        h = os_call("/v11-*/_search", {"size": 1, "_source": [side + ".geolocation"], "query": {"bool": {"filter": [
+            {"term": {side + ".ip.keyword": ip}}, {"exists": {"field": side + ".geolocation.latitude"}}]}}})["hits"]["hits"]
+        if h:
+            g = h[0]["_source"][side]["geolocation"]
+            loc = {"lat": g["latitude"], "lon": g["longitude"], "city": g.get("city") or g.get("country")}
+            break
+    _located[ip] = (time.time(), loc)
+    return loc
+
+
+def fw_sites():
+    """The firewalls reporting in the last hour, each with a location: override > UTMStack GeoIP > home."""
+    if _sites["list"] and time.time() - _sites["t"] < SITE_TTL_S:
+        return _sites["list"]
+    r = os_call(FW_SEARCH, {"size": 0, "query": rng("now-1h"), "aggs": {"fw": {
+        "terms": {"field": "dataSource.keyword", "size": 100},
+        "aggs": {"dn": {"terms": {"field": "log.deviceName.keyword", "size": 1}}}}}})
+    out = []
+    for b in r["aggregations"]["fw"]["buckets"]:
+        ip = _q(b["key"])
+        name = _q(b["dn"]["buckets"][0]["key"]) if b["dn"]["buckets"] else ip
+        loc, source = SITE_OVERRIDES.get(name) or SITE_OVERRIDES.get(ip), "configured"
+        if not loc:
+            try:
+                loc, source = _locate_ip(ip), "geoip"
+            except Exception:
+                loc = None
+        if not loc:
+            loc, source = HOME, "home"
+        out.append({"id": ip, "name": name, "lat": loc["lat"], "lon": loc["lon"], "city": loc.get("city"), "loc_source": source})
+    out.sort(key=lambda x: x["name"].lower())
+    _sites.update(t=time.time(), list=out)
+    return out
+
+
+def _remote_aggs(side):
+    g = side + ".geolocation."
+    return {"terms": {"field": "dataSource.keyword", "size": 100}, "aggs": {
+        "cc": {"terms": {"field": g + "countryCode.keyword", "size": 15, "missing": "??"}, "aggs": {
+            "city": {"terms": {"field": g + "city.keyword", "size": 6, "missing": ""}, "aggs": {
+                "lat": {"avg": {"field": g + "latitude"}}, "lon": {"avg": {"field": g + "longitude"}},
+                "country": {"terms": {"field": g + "country.keyword", "size": 1}},
+                "out": {"terms": {"field": "actionResult.keyword", "size": 4}}}}}}}}
+
+
+def _outcomes(buckets):
+    o = {_q(b["key"]).lower(): b["doc_count"] for b in buckets}
+    return o.get("denied", 0), o.get("failed", 0)
+
+
+def build_geo(window):
+    span = rng("now-%ds" % window)
+    has = lambda f: {"exists": {"field": f}}
+    r = os_call(FW_SEARCH, {"size": 0, "track_total_hits": True, "query": span, "aggs": {
+        "newest": {"max": {"field": "@timestamp"}},
+        "outcome": {"terms": {"field": "actionResult.keyword", "size": 5}},
+        "per_fw": {"terms": {"field": "dataSource.keyword", "size": 100},
+                   "aggs": {"out": {"terms": {"field": "actionResult.keyword", "size": 4}}}},
+        # inbound: the remote side started it; outbound: a local host reached a remote one
+        "in": {"filter": has("origin.geolocation.latitude"), "aggs": {"fw": _remote_aggs("origin")}},
+        "out": {"filter": {"bool": {"filter": [has("target.geolocation.latitude")],
+                                    "must_not": [has("origin.geolocation.latitude")]}},
+                "aggs": {"fw": _remote_aggs("target")}},
+    }})
+    t = os_call(FW_SEARCH, {"size": 14, "sort": [{"@timestamp": "desc"}], "query": {"bool": {"filter": [
+        span, {"term": {"actionResult.keyword": "denied"}}, has("origin.geolocation.latitude")]}},
+        "_source": ["@timestamp", "origin.ip", "origin.geolocation.city", "origin.geolocation.country",
+                    "origin.geolocation.countryCode", "target.port", "protocol", "dataSource"]})
+    a = r["aggregations"]
+    total = r["hits"]["total"]["value"]
+    denied, failed = _outcomes(a["outcome"]["buckets"])
+
+    sites = [dict(x) for x in fw_sites()]
+    by_id = {x["id"]: x for x in sites}
+    for b in a["per_fw"]["buckets"]:
+        ip = _q(b["key"])
+        if ip not in by_id:                      # firewall seen for the first time since the site list was cached
+            by_id[ip] = {"id": ip, "name": ip, "lat": HOME["lat"], "lon": HOME["lon"], "city": HOME.get("city"), "loc_source": "home"}
+            sites.append(by_id[ip])
+        d, f = _outcomes(b["out"]["buckets"])
+        by_id[ip].update(total=b["doc_count"], denied=d)
+    for x in sites:
+        x.setdefault("total", 0); x.setdefault("denied", 0)
+
+    arcs, countries = [], {}
+    for direction in ("in", "out"):
+        for fb in a[direction]["fw"]["buckets"]:
+            site = _q(fb["key"])
+            for cb in fb["cc"]["buckets"]:
+                cc = _q(cb["key"])
+                for cityb in cb["city"]["buckets"]:
+                    lat, lon = cityb["lat"]["value"], cityb["lon"]["value"]
+                    if lat is None or lon is None:
+                        continue
+                    d, _ = _outcomes(cityb["out"]["buckets"])
+                    name = cityb["country"]["buckets"][0]["key"] if cityb["country"]["buckets"] else cc
+                    arcs.append({"site": site, "dir": direction, "cc": cc, "country": _q(name), "city": _q(cityb["key"]),
+                                 "lat": round(lat, 3), "lon": round(lon, 3), "count": cityb["doc_count"], "denied": d})
+                    c = countries.setdefault(cc, {"cc": cc, "country": _q(name), "count": 0, "denied": 0, "in": 0, "out": 0})
+                    c["count"] += cityb["doc_count"]; c["denied"] += d; c[direction] += cityb["doc_count"]
+    arcs.sort(key=lambda x: x["count"], reverse=True)
+
+    ticker = []
+    for h in t["hits"]["hits"]:
+        s_ = h["_source"]
+        o = s_.get("origin") or {}
+        g = o.get("geolocation") or {}
+        ticker.append({"t": s_.get("@timestamp"), "ip": o.get("ip"), "city": g.get("city"), "country": g.get("country"),
+                       "cc": g.get("countryCode"), "port": (s_.get("target") or {}).get("port"),
+                       "proto": s_.get("protocol"), "site": _q(s_.get("dataSource"))})
+
+    newest = a["newest"].get("value")
+    return {"window_s": window, "generated": datetime.now(timezone.utc).isoformat(),
+            "age_s": round(max(0, time.time() - newest / 1000), 1) if newest else None,
+            "total": total, "denied": denied, "failed": failed, "per_min": round(total * 60 / window),
+            "home": HOME, "sites": sites, "arcs": arcs[:MAX_ARCS], "arcs_total": len(arcs),
+            "countries": sorted(countries.values(), key=lambda c: c["count"], reverse=True)[:12],
+            "ticker": ticker}
+
+
+def anonymize(geo):
+    """Wall-display mode: client firewall names and WAN addresses become Site A, Site B, ..."""
+    def label(i):
+        s = ""
+        i += 1
+        while i:
+            i, r = divmod(i - 1, 26)
+            s = chr(65 + r) + s
+        return "Site " + s
+    alias = {x["id"]: ("s%d" % i, label(i)) for i, x in enumerate(geo["sites"])}
+    out = dict(geo)
+    out["sites"] = [dict(x, id=alias[x["id"]][0], name=alias[x["id"]][1]) for x in geo["sites"]]
+    out["arcs"] = [dict(x, site=alias.get(x["site"], ("?",))[0]) for x in geo["arcs"]]
+    out["ticker"] = [dict(x, site=alias.get(x["site"], ("?", "?"))[1]) for x in geo["ticker"]]
+    out["anonymized"] = True
+    return out
+
+
+def api_geo(window=60, anon=False):
+    window = window if window in GEO_WINDOWS_S else 60
+    with _geo_lock:
+        hit = _geo_cache.get(window)
+        if not hit or time.time() - hit[0] >= GEO_TTL_S:
+            hit = (time.time(), build_geo(window))
+            _geo_cache[window] = hit
+    data = hit[1]                                # shared cache: never modify it in place
+    if anon:
+        return anonymize(data)
+    names = {x["id"]: x["name"] for x in data["sites"]}
+    return dict(data, ticker=[dict(x, site=names.get(x["site"], x["site"])) for x in data["ticker"]])
+
+
+_range_cache = {}
+_range_lock = threading.Lock()
+
+
+def data_for(hours):
+    """Dashboard data for a window. 24 h comes from the background refresher; 1 h / 6 h are built on
+    request and shared for REFRESH_S seconds, so extra viewers do not multiply OpenSearch load."""
+    if hours == 24:
+        with _lock:
+            return dict(_state["data"])
+    with _range_lock:
+        hit = _range_cache.get(hours)
+        if hit and time.time() - hit[0] < REFRESH_S:
+            return dict(hit[1])
+        try:
+            data = collect(hours)
+        except Exception as e:
+            data = dict(hit[1]) if hit else {}
+            data["error"] = str(e)
+        _range_cache[hours] = (time.time(), data)
+        return dict(data)
+
+
 def refresher():
     while True:
         t0 = time.time()
@@ -919,7 +1152,7 @@ class Handler(BaseHTTPRequestHandler):
     def send(self, code, ctype, body, extra=None):
         self.send_response(code)
         self.send_header("Content-Type", ctype)
-        self.send_header("Cache-Control", "no-store")
+        self.send_header("Cache-Control", (extra or {}).pop("Cache-Control", "no-store"))
         self.send_header("X-Content-Type-Options", "nosniff")
         self.send_header("X-Frame-Options", "DENY")
         self.send_header("Referrer-Policy", "no-referrer")
@@ -964,10 +1197,15 @@ class Handler(BaseHTTPRequestHandler):
             "/api/cluster": lambda: api_cluster(),
             "/api/storage": lambda: api_storage(),
             "/api/whois": lambda: api_whois(p.get("ip", "")[:64]),
+            "/api/geo": lambda: api_geo(int(p["window"]) if p.get("window", "").isdigit() else 60,
+                                        p.get("anon") == "1"),
         }
         if u.path == "/api/data":
-            with _lock:
-                data = dict(_state["data"])
+            try:
+                hours = int(p.get("range", "24"))
+            except ValueError:
+                hours = 24
+            data = data_for(hours if hours in RANGES_H else 24)
             data["lag"] = lag_summary()
             self.send(200, "application/json", json.dumps(data).encode())
         elif u.path == "/api/history":
@@ -982,6 +1220,9 @@ class Handler(BaseHTTPRequestHandler):
             except Exception as e:  # report to the UI instead of dropping the connection
                 body = json.dumps({"error": str(e)[:300]}).encode()
             self.send(200, "application/json", body)
+        elif u.path == "/land.json":                  # static world outline for the live map
+            with open(os.path.join(HERE, "land.json"), "rb") as f:
+                self.send(200, "application/json", f.read(), {"Cache-Control": "private, max-age=86400"})
         elif u.path in ("/", "/index.html"):
             with open(os.path.join(HERE, "index.html"), "rb") as f:
                 self.send(200, "text/html; charset=utf-8", f.read())

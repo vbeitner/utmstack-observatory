@@ -7,6 +7,10 @@ A read-only operations dashboard for a UTMStack v11 SIEM. It reads UTMStack's ow
 - **30 days of history** with daily and weekly comparisons, kept in a small local database because OpenSearch only retains about a day of logs
 - **storage tracking**: size of the alert and log indices per day, bytes per alert, and days of disk left
 - optional **AI Traffic** tab: bytes in/out of chosen servers, from Sophos XG firewall logs
+- **Live Firewall Map**: animated arcs from every Sophos XG firewall to the cities it is talking to (outbound, inbound
+  allowed, denied), top countries, and a ticker of the latest blocked inbound connections; 1 / 5 / 15 minute windows
+- **time-range picker** (1 h / 6 h / 24 h) for the counters, event-source donut, top alert rules and latest-alert list
+- **Wall mode** for a NOC screen: full screen, client firewall names replaced by *Site A, Site B…*, rotating every 30 s
 
 Python standard library only. Runs as one container (a Docker Swarm service) next to UTMStack.
 
@@ -38,9 +42,27 @@ Common options:
 | `--tz America/New_York` | time zone for day boundaries (default: the host's) |
 | `--stack NAME` | UTMStack stack name if it is not auto-detected |
 | `--import-history FILE` | seed `history.db` from an earlier install |
+| `--sites "Name=lat,lon,City;1.2.3.4=lat,lon"` | pin firewalls the map cannot place on its own (by device name or WAN IP) |
+| `--home "lat,lon,City"` | where unplaceable firewalls are drawn (default Toronto) |
 
 Other commands: `sudo ./install.sh status | logs | password [NEW] | uninstall [--purge]`.
 `uninstall` keeps your stored history; `--purge` deletes it, the config and the image.
+
+## Live Firewall Map
+
+Reads the Sophos XG logs UTMStack already stores (`v11-log-firewall-sophos-xg-*`) and uses UTMStack's own GeoIP
+enrichment (`origin.geolocation` / `target.geolocation`), so **no GeoIP database and no outside lookup** is needed.
+
+- **Firewall locations**: each firewall is identified by its WAN address (`dataSource`) and name (`log.deviceName`).
+  Its pin comes from `--sites` if you set one, otherwise from UTMStack's GeoIP record for that WAN address, otherwise
+  the `--home` location. The side panel names any firewall drawn at the home pin.
+- **Direction**: *inbound* = the remote address started the connection; *outbound* = a local host reached out.
+  Private addresses have no coordinates and are left off the map.
+- **Load**: one aggregation query per window every 10 s, shared by every open browser (`/api/geo`).
+- **Freshness**: the panel shows the age of the newest firewall event, so "live" is never overstated.
+- **Wall mode** (button in the header, or open `/?wall=1`): firewall names and WAN addresses are replaced by
+  *Site A, Site B…* **on the server**, so the screen never receives them. Views rotate between the map and the
+  counters/trend chart; panels that show data-source names (alert list, silent sources) are not shown. Press Esc to exit.
 
 ## Security
 
@@ -53,6 +75,25 @@ Other commands: `sudo ./install.sh status | logs | password [NEW] | uninstall [-
 - It connects to OpenSearch without verifying its certificate (UTMStack uses an internal self-signed one on a private network).
 - **WHOIS** (alert detail) sends the looked-up public IP to `rdap.org`, which forwards to the regional registry. Private addresses are never sent. Results are cached for 24 hours.
 - The history database stores counts only, not raw events.
+
+## Rebuild from GitHub
+
+Everything needed is in this repository (`vbeitner/utmstack-observatory`, private). On the UTMStack Swarm manager:
+
+```bash
+git clone https://github.com/vbeitner/utmstack-observatory.git
+cd utmstack-observatory
+sudo ./install.sh                 # or: git pull && sudo ./install.sh   to upgrade
+```
+
+Nothing secret is in git. The installer reads the OpenSearch credentials from UTMStack's own service spec, generates
+the dashboard password into `/etc/utmstack-observatory/admin.pass` (root only) on first install, and keeps it, the
+settings (`config.env`) and the history volume on every upgrade.
+
+The world outline `app/land.json` is generated from Natural Earth 1:110m land (public domain) via world-atlas 2.0.2:
+`python3 tools/build_land.py land-110m.json app/land.json` (download command in the script header).
+
+Tests (standard library only, OpenSearch stubbed): `python3 -m unittest discover -s tests -v`
 
 ## What is stored where
 

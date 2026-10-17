@@ -25,7 +25,7 @@
 - CSP `script-src` now `'self' 'unsafe-inline'` to load `/layout.js`.
 - Cluster advice: `api_cluster().fix` is now `{patterns, steps:[{title, cmd}]}`; optional `STACK_NAME` env (default
   `utmstack`).
-- Tests: 36 Python + 10 JavaScript.
+- Tests: 42 Python + 13 JavaScript. The copy-paste OpenSearch commands only ever include index names matching `[a-z0-9._-]+`; anything else is listed for manual handling.
 
 ## 1.1.2 — 2026-10-17
 

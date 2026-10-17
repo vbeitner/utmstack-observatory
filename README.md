@@ -13,8 +13,9 @@ A read-only operations dashboard for a UTMStack v11 SIEM. It reads UTMStack's ow
 - **Movable widgets and named screens** (Edit button right of the screen tabs) with a shared default layout and
   personal per-browser layouts
 - **Wall mode** for a NOC screen: full screen, client firewall names replaced by *Site A, Site B…*, rotating every 30 s
+- **PDF/HTML reports** on demand or on a daily schedule, downloadable from the dashboard (Reports, top right)
 
-Python standard library only. Runs as one container (a Docker Swarm service) next to UTMStack.
+Python standard library only, with one exception (`fpdf2`, for the PDF reports). Runs as one container (a Docker Swarm service) next to UTMStack.
 
 ## Requirements
 
@@ -90,6 +91,17 @@ reloads the page so you log back in with the new one. A setting saved here overr
 flag/env var; leaving a field blank on save clears the override and falls back to whatever `install.sh` set.
 Dashboard layout (widgets, screens, wall rotation) has its own editor — the drawer just links to it.
 
+## Reports
+
+The **Reports** button in the header opens a drawer listing generated reports (newest first) with PDF and HTML
+download links, and a **Generate now** button for an on-demand report. Each report covers the last 24 hours:
+the KPI/trend summary, top alert rules and recent alerts (with MITRE ATT&CK technique where the rule maps to
+one), the Live Firewall Map's top blocked-inbound countries, and storage/retention health.
+
+Set a generation hour (0–23, UTC) in the Settings panel to also get one automatically every day; leave it
+blank and reports are on-demand only. Files live in `/data/reports` (the same volume as the history database
+and settings), the last 30 are kept, and download links require the dashboard login like everything else.
+
 ## Rebuild from GitHub
 
 Everything needed is in this repository (`vbeitner/utmstack-observatory`, private). On the UTMStack Swarm manager:
@@ -107,7 +119,7 @@ settings (`config.env`) and the history volume on every upgrade.
 The world outline `app/land.json` is generated from Natural Earth 1:110m land (public domain) via world-atlas 2.0.2:
 `python3 tools/build_land.py land-110m.json app/land.json` (download command in the script header).
 
-Tests (standard library only, OpenSearch stubbed): `python3 -m unittest discover -s tests -v` and `node --test tests/`
+Tests (OpenSearch stubbed): `pip install -r requirements.txt` once, then `python3 -m unittest discover -s tests -v` and `node --test tests/`
 
 ## What is stored where
 
@@ -118,6 +130,7 @@ Tests (standard library only, OpenSearch stubbed): `python3 -m unittest discover
 | Dashboard password | `/etc/utmstack-observatory/admin.pass` |
 | Shared dashboard layout | Docker volume `utmstack-observatory-data` (`/data/layout.json`) |
 | Live-edited settings (login, API keys, support, map, AI hosts) | Docker volume `utmstack-observatory-data` (`/data/settings.json`) |
+| Generated PDF/HTML reports (last 30 kept) | Docker volume `utmstack-observatory-data` (`/data/reports/`) |
 
 History starts when the dashboard is first installed. On a first run it also backfills event counts from UTMStack's ingest
 statistics (`v11-statistics-*`) for as far back as that index goes. Alerts and AI traffic cannot be backfilled.

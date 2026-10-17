@@ -1,5 +1,33 @@
 # Release notes
 
+## 1.3.0 — 2026-10-17
+
+**For users**
+- New **Reports** button (header, top right): generate a PDF or HTML security report on demand, or set a daily
+  generation hour in Settings and get one automatically. Each report covers the last 24 hours — event/alert
+  summary, top alert rules and recent alerts (with MITRE ATT&CK technique where the underlying rule maps to
+  one), the Live Firewall Map's top blocked-inbound countries, and storage/retention health. Past reports
+  (last 30) are listed with download links for both formats.
+- Alert data everywhere now carries its MITRE ATT&CK technique when the rule has one, so it's available for
+  both the dashboard's alert detail view and the new reports.
+
+**Technical**
+- This is the one place the project steps outside "Python standard library only": PDF rendering uses `fpdf2`
+  (see `requirements.txt`), a pure-Python library with no system dependencies, so the container build and
+  `--read-only`/`--cap-drop ALL` runtime posture are unaffected.
+- New `app/reports.py` (pure rendering + storage, no HTTP/OpenSearch): `render_html()`, `render_pdf()`,
+  `generate()`/`list_reports()`/`prune()`. Files live in `/data/reports/`, same volume as history/layout/settings.
+- `server.py`: `build_report_data()` reuses the existing `data_for()`/`build_geo()`/`api_storage()` aggregations
+  (no new OpenSearch query shapes); a `report_loop()` background thread (same pattern as the existing
+  history/lag loops) checks once a minute whether it's the configured hour and a report hasn't run yet today.
+  New `GET`/`POST /api/reports*` routes, same auth as everything else; generation requires the same CSRF header
+  as the layout/settings saves. New `report_hour` (0–23) setting, validated and exposed through the existing
+  Settings panel.
+- `alert_row()`/`alert_summary()` and their OpenSearch `_source` lists now include `technique`, dropping the
+  literal string `"Indeterminate"` (not a real MITRE classification) the same way the UI already did.
+- Verified against a real `docker build` of the image (not just unit tests): confirmed `fpdf2` imports and
+  `server.py` starts cleanly under the container's own `python3 -I`. Tests: 93 Python + 13 JS.
+
 ## 1.2.6 — 2026-10-17
 
 **For users**

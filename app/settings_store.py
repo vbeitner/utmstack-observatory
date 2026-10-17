@@ -16,7 +16,7 @@ FILE = "settings.json"
 MAX_VALUE_CHARS = 2000
 MAX_BYTES = 16 * 1024
 CACHE_TTL_S = 2            # load() is on the hot path (every authorized() call); avoid a disk read per request
-KEYS = {"dash_user", "dash_pass", "abuseipdb_key", "virustotal_key", "support", "home", "sites", "ai_hosts"}
+KEYS = {"dash_user", "dash_pass", "abuseipdb_key", "virustotal_key", "support", "home", "sites", "ai_hosts", "report_hour"}
 SECRET_KEYS = {"dash_pass", "abuseipdb_key", "virustotal_key"}
 
 _cache = {"t": 0.0, "dir": None, "data": {}}

@@ -1297,8 +1297,8 @@ class Handler(BaseHTTPRequestHandler):
             with open(os.path.join(HERE, "layout.js"), "rb") as f:
                 self.send(200, "text/javascript; charset=utf-8", f.read())
         elif u.path == "/api/layout":
-            lay = layout_store.load(DATA_DIR)
-            self.send(200, "application/json", json.dumps({"layout": lay, "notes": []}).encode())
+            lay, notes = layout_store.load_with_notes(DATA_DIR)
+            self.send(200, "application/json", json.dumps({"layout": lay, "notes": notes}).encode())
         elif u.path == "/land.json":                  # static world outline for the live map
             with open(os.path.join(HERE, "land.json"), "rb") as f:
                 self.send(200, "application/json", f.read(), {"Cache-Control": "private, max-age=86400"})

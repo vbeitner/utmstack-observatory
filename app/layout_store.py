@@ -104,16 +104,46 @@ def validate_layout(obj):
     return clean, notes
 
 
-def load(data_dir):
+def load_with_notes(data_dir):
+    """(layout, notes). A missing file gives the default silently; a file that exists but cannot be used gives the
+    default plus a note, and is left untouched until the next save moves it aside."""
+    path = os.path.join(data_dir, FILE)
     try:
-        with open(os.path.join(data_dir, FILE)) as f:
-            return validate_layout(json.load(f))[0]
+        with open(path) as f:
+            raw = json.load(f)
+    except FileNotFoundError:
+        return validate_layout(default_layout())[0], []
     except (OSError, ValueError):
-        return validate_layout(default_layout())[0]
+        raw = None
+    try:
+        return validate_layout(raw)
+    except ValueError as e:
+        return (validate_layout(default_layout())[0],
+                ["The saved shared layout could not be read (%s); showing the default. Saving a layout keeps the old "
+                 "file as layout.json.bad-<time> next to it." % str(e)[:120]])
+
+
+def load(data_dir):
+    return load_with_notes(data_dir)[0]
+
+
+def _stored_is_unusable(data_dir):
+    path = os.path.join(data_dir, FILE)
+    if not os.path.exists(path):
+        return False
+    try:
+        with open(path) as f:
+            validate_layout(json.load(f))
+        return False
+    except (OSError, ValueError):
+        return True
 
 
 def save(data_dir, layout):
     clean, _ = validate_layout(layout)
+    if _stored_is_unusable(data_dir):           # never overwrite a file we cannot read (e.g. from a newer build)
+        stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+        os.replace(os.path.join(data_dir, FILE), os.path.join(data_dir, "%s.bad-%s" % (FILE, stamp)))
     clean["version"] = load(data_dir).get("version", 0) + 1
     clean["saved_at"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     body = json.dumps(clean, separators=(",", ":"))

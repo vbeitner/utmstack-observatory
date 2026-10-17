@@ -96,6 +96,32 @@ class Storage(unittest.TestCase):
             ls.save(tempfile.mkdtemp(), lay)
 
 
+class StoredFileProblems(unittest.TestCase):
+    def write(self, d, obj):
+        with open(os.path.join(d, "layout.json"), "w") as f:
+            f.write(obj if isinstance(obj, str) else json.dumps(obj))
+
+    def test_notes_about_dropped_widgets_are_returned(self):
+        d = tempfile.mkdtemp()
+        self.write(d, one_screen([{"type": "map", "x": 0, "y": 0, "w": 6, "h": 8},
+                                  {"type": "future-widget", "x": 6, "y": 0, "w": 6, "h": 8}]))
+        lay, notes = ls.load_with_notes(d)
+        self.assertEqual([w["type"] for w in lay["screens"][0]["widgets"]], ["map"])
+        self.assertTrue(any("future-widget" in n for n in notes))
+
+    def test_unusable_file_is_reported_and_kept_aside_on_next_save(self):
+        d = tempfile.mkdtemp()
+        self.write(d, {"schema": 2, "version": 7, "screens": []})          # e.g. from a newer build
+        lay, notes = ls.load_with_notes(d)
+        self.assertEqual(lay["screens"][0]["name"], "Overview")
+        self.assertTrue(any("could not be read" in n for n in notes))
+        ls.save(d, ls.default_layout())
+        kept = [f for f in os.listdir(d) if f.startswith("layout.json.bad-")]
+        self.assertEqual(len(kept), 1)                                     # the unreadable file is preserved, not clobbered
+        with open(os.path.join(d, kept[0])) as f:
+            self.assertEqual(json.load(f)["version"], 7)
+
+
 class Csrf(unittest.TestCase):
     def test_requires_json_custom_header_and_same_origin(self):
         ok = {"Content-Type": "application/json", "X-Observatory": "1", "Host": "utm:8765", "Origin": "http://utm:8765"}
@@ -147,6 +173,12 @@ class HttpRoutes(unittest.TestCase):
         h = {"Content-Type": "application/json", "X-Observatory": "1"}
         st, err = self.req("PUT", "/api/layout", [1, 2], h)
         self.assertEqual(st, 400)
+
+    def test_get_passes_notes_through(self):
+        with open(os.path.join(os.environ["DATA_DIR"], "layout.json"), "w") as f:
+            json.dump(one_screen([{"type": "hologram", "x": 0, "y": 0, "w": 4, "h": 4}]), f)
+        st, got = self.req("GET", "/api/layout")
+        self.assertTrue(any("hologram" in n for n in got["notes"]))
 
     def test_bad_layout_is_400(self):
         h = {"Content-Type": "application/json", "X-Observatory": "1"}

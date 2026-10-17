@@ -883,26 +883,51 @@ def api_cluster():
                                   "node these replica copies can never be created and the status stays yellow. Nothing is missing: all %d primary "
                                   "shards are active, and searching and indexing work normally. A replica would not add safety here anyway, because "
                                   "it would live on the same machine." % h.get("active_primary_shards", 0)})
-            notes.append({"level": "info", "title": "Why only some indices",
-                          "text": "UTMStack's own index template sets 0 replicas for its alert, log and .utm* indices. The indices below come from other "
-                                  "writers (the OpenSearch security audit log, ingest statistics, and OpenSearch's own management history) and keep "
-                                  "the default of 1 replica."})
+            notes.append({"level": "info", "title": "Why these indices have a replica",
+                          "text": "OpenSearch gives every new index 1 replica unless a template says otherwise. UTMStack ships a template meant "
+                                  "to set 0 replicas for its own indices, but on some versions its patterns have no wildcard (e.g. 'v11-alert-'), "
+                                  "so it does not match the daily indices. The security audit log, statistics and OpenSearch's management "
+                                  "history are not covered by it at all."})
         else:
             notes.append({"level": "warn", "title": "%d replica shards cannot be placed" % len(un), "text": "See the allocation decider below; with several nodes this usually means disk watermarks, allocation filters or too few nodes."})
     fix = None
     if un and not un_p and single:
-        pats = [f["family"] + "-*" for f in fam_rows]
-        fix = {"patterns": pats,
-               "settings": "docker exec -it $(docker ps -q -f name=node1) sh -c \"curl -sk -u admin:'YOUR_OPENSEARCH_PASSWORD' -XPUT -H 'Content-Type: application/json' "
-                           "'https://localhost:9200/%s/_settings' -d '{\\\"index\\\":{\\\"number_of_replicas\\\":0}}'\"" % ",".join(pats),
-               "template": "docker exec -it $(docker ps -q -f name=node1) sh -c \"curl -sk -u admin:'YOUR_OPENSEARCH_PASSWORD' -XPUT -H 'Content-Type: application/json' "
-                           "'https://localhost:9200/_index_template/single-node-no-replicas' -d '{\\\"index_patterns\\\":[%s],\\\"priority\\\":1,"
-                           "\\\"template\\\":{\\\"settings\\\":{\\\"number_of_replicas\\\":0}}}'\"" % ",".join('\\\"%s\\\"' % p for p in pats)}
+        pats = [f["family"] + ("" if f["family"] in ALL_INDEX_FAMILIES else "-*") for f in fam_rows]
+        system = [x for x in pats if x.startswith(".") or x.startswith("security-auditlog")]
+        data = [x for x in pats if x not in system]
+        fix = {"patterns": pats, "steps": []}
+        if data:
+            fix["steps"].append({"title": "Remove replicas from the existing data indices",
+                                 "cmd": opensearch_put_cmd("/%s/_settings" % ",".join(data), '{"index":{"number_of_replicas":0}}')})
+        if system:
+            fix["steps"].append({"title": "Remove replicas from OpenSearch's own (system) indices — run separately; the security "
+                                          "plugin may refuse some of these, which does not affect step 1",
+                                 "cmd": opensearch_put_cmd("/%s/_settings?expand_wildcards=all" % ",".join(system),
+                                                           '{"index":{"number_of_replicas":0}}')})
+        fix["steps"].append({"title": "Stop new indices getting a replica",
+                             "cmd": opensearch_put_cmd("/_index_template/single-node-no-replicas",
+                                                       '{"index_patterns":[%s],"priority":10,"template":{"settings":{"number_of_replicas":0}}}'
+                                                       % ",".join('"%s"' % x for x in pats if x not in ALL_INDEX_FAMILIES))})
     return {"status": h["status"], "nodes": h.get("number_of_data_nodes"), "active_pct": h.get("active_shards_percent_as_number"),
             "active": h.get("active_shards"), "primaries": h.get("active_primary_shards"), "unassigned": len(un), "unassigned_primaries": len(un_p),
             "reasons": reasons, "families": fam_rows, "decider": decider,
             "explained": ({"index": ex.get("index"), "shard": ex.get("shard"), "primary": ex.get("primary"), "text": ex.get("allocate_explanation")} if ex else None),
             "notes": notes, "fix": fix}
+
+
+ALL_INDEX_FAMILIES = (".opendistro-ism-config", ".opendistro-job-scheduler-lock")   # single indices, not daily series
+STACK = env("STACK_NAME", "utmstack")
+
+
+def opensearch_put_cmd(path, body):
+    """A copy-paste command for the UTMStack host: every docker call under sudo, the OpenSearch password read from
+    UTMStack's backend service and passed on stdin (never typed, never on a command line or in shell history)."""
+    body_sh = body.replace('"', '\\"')
+    return ("P=$(sudo docker service inspect %s_backend --format '{{range .Spec.TaskTemplate.ContainerSpec.Env}}{{println .}}{{end}}' "
+            "| sed -n 's/^ELASTICSEARCH_PASSWORD=//p'); N=$(sudo docker ps -q -f name=%s_node1); "
+            "printf '%%s\\n' \"$P\" | sudo docker exec -i \"$N\" sh -c 'read -r PW; curl -sk -u \"admin:$PW\" -XPUT "
+            "-H \"Content-Type: application/json\" \"https://localhost:9200%s\" -d \"%s\"'; echo"
+            % (STACK, STACK, path, body_sh))
 
 
 # ---------------------------------------------------------------- live firewall map

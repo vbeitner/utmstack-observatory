@@ -1838,10 +1838,11 @@ body.editing .edit-bar{display:flex}
       }
       if(d.fix){
         html += '<h3 class="tl-title">How to fix it</h3><div class="note-card warn"><b>This dashboard is read-only and will not change your cluster.</b><br>'+
-          'If you want a green status, run these two commands yourself on the UTMStack server (replace the password placeholder with the OpenSearch password from the backend service). '+
-          'They remove the impossible replica copies from existing indices and stop new daily indices from asking for one. No data is deleted.</div>'+
-          '<div class="ai-sec">1 · REMOVE REPLICAS FROM THE EXISTING INDICES</div><pre class="cmd">'+esc(d.fix.settings)+'</pre>'+
-          '<div class="ai-sec">2 · STOP NEW INDICES GETTING A REPLICA</div><pre class="cmd">'+esc(d.fix.template)+'</pre>';
+          'If you want a green status, paste these commands one at a time into a terminal on the UTMStack server, as a user that can use sudo. '+
+          'Each one reads the OpenSearch password from UTMStack\'s backend service by itself (you never type it) and prints OpenSearch\'s answer: '+
+          '<code>{"acknowledged":true}</code> means it worked. They remove the replica copies a one-node cluster can never place and stop new daily '+
+          'indices from asking for one. No data is deleted.</div>'+
+          d.fix.steps.map(function(st, i){ return '<div class="ai-sec">'+(i+1)+' · '+esc(st.title.toUpperCase())+'</div><pre class="cmd">'+esc(st.cmd)+'</pre>'; }).join('');
       }
       digBody.innerHTML = html;
     }).catch(function(e){ if(live()) failed(e); });

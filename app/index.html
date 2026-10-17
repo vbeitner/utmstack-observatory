@@ -314,6 +314,23 @@ body.wall #rangeSeg,body.wall #trendsBtn,body.wall #mapWin{display:none}
 .sup-grid{display:grid;grid-template-columns:auto 1fr;gap:6px 18px;font-size:14px}
 .sup-grid .k{font-family:var(--mono);font-size:12px;font-weight:600;color:var(--muted);letter-spacing:.06em;padding-top:2px}
 .sup-grid .v{color:var(--ink);overflow-wrap:anywhere}
+body.editing .board{background-image:linear-gradient(to right,rgba(53,231,255,.05) 1px,transparent 1px);background-size:calc((100% + 12px)/12) 100%}
+body.editing .board>[data-widget]{outline:1px dashed var(--border-strong);outline-offset:3px}
+.w-tools{display:none;position:absolute;top:6px;right:8px;z-index:6;gap:6px}
+body.editing .w-tools{display:flex}
+.w-tools button{height:26px;min-width:26px;padding:0 8px;border:1px solid var(--border-strong);border-radius:4px;background:var(--s3);font-family:var(--mono);font-size:12px;color:var(--ink2)}
+.w-drag{cursor:grab}
+.w-resize{position:absolute;right:2px;bottom:2px;width:16px;height:16px;cursor:nwse-resize;z-index:6;display:none;
+  background:linear-gradient(135deg,transparent 50%,var(--cyan) 50%)}
+body.editing .w-resize{display:block}
+.board>[data-widget]{position:relative}
+.ghost{outline:2px solid var(--cyan)!important;opacity:.85}
+.edit-bar{display:none;gap:8px;align-items:center;flex-wrap:wrap}
+body.editing .edit-bar{display:flex}
+.add-menu{position:absolute;z-index:30;background:var(--s2);border:1px solid var(--border-strong);border-radius:4px;padding:6px;min-width:300px;box-shadow:0 10px 30px rgba(0,0,0,.5)}
+.add-menu button{display:block;width:100%;text-align:left;padding:8px 10px;border-radius:3px}
+.add-menu button:hover,.add-menu button:focus-visible{background:var(--s3)}
+.add-menu small{display:block;color:var(--muted);font-size:12px}
 /* ---------- readability: bolder small labels (applies across the whole dashboard) ---------- */
 .kpi-label,.truth .k,.truth .v,thead th,.seg button,.ctl,.txt-btn,.product,.map-stats .k,.tk .t,.lg,.kpi-secondary,.bar-state,.res-sub,.mc-row .c,.map-note,.env{font-weight:600}
 .wordmark{font-size:21px}
@@ -372,6 +389,15 @@ body.wall #rangeSeg,body.wall #trendsBtn,body.wall #mapWin{display:none}
     <div class="tabs" id="screenTabs" role="tablist"></div>
     <span class="spacer"></span>
     <span class="panel-meta" id="layoutState"></span>
+    <div class="edit-bar" id="editBar">
+      <button class="ctl" id="addWidgetBtn" aria-haspopup="menu">+ Widget</button>
+      <button class="ctl" id="addScreenBtn">+ Screen</button>
+      <button class="ctl" id="renameScreenBtn">Rename</button>
+      <button class="ctl" id="wallScreenBtn" aria-pressed="false" title="Include this screen in wall mode">On wall</button>
+      <button class="ctl icon" id="screenLeftBtn" aria-label="Move screen left">◀</button>
+      <button class="ctl icon" id="screenRightBtn" aria-label="Move screen right">▶</button>
+      <button class="ctl" id="deleteScreenBtn">Delete screen</button>
+    </div>
     <button class="ctl" id="editBtn" aria-pressed="false" title="Move, resize, add and remove widgets">Edit</button>
   </nav>
   <main class="board" id="board">
@@ -1100,6 +1126,7 @@ body.wall #rangeSeg,body.wall #trendsBtn,body.wall #mapWin{display:none}
         (s.wall ? '<i class="wall-dot" title="Shown in wall mode"></i>' : '')+'</button>';
     }).join('');
     $$('#screenTabs .tab').forEach(function(b){ b.addEventListener('click', function(){ showScreen(b.dataset.id); }); });
+    var wb = $('#wallScreenBtn'); if(wb) wb.setAttribute('aria-pressed', String(!!cur.wall));
   }
   function renderBoard(){
     var s = currentScreen(), on = {};
@@ -1132,6 +1159,112 @@ body.wall #rangeSeg,body.wall #trendsBtn,body.wall #mapWin{display:none}
     });
   }
   window.addEventListener('resize', function(){ if(BOARD.shared) renderBoard(); });
+  /* ---------- edit mode ---------- */
+  var editing = false;
+  function savePersonal(){
+    try { localStorage.setItem('obsPersonalLayout', JSON.stringify(BOARD.personal)); } catch(e){}
+    if(typeof renderLayoutState === 'function') renderLayoutState();   // header indicator arrives in Task 6
+  }
+  function ensurePersonal(){
+    if(!BOARD.personal) BOARD.personal = {baseVersion: BOARD.shared.version, layout: JSON.parse(JSON.stringify(BOARD.shared))};
+    return BOARD.personal.layout;
+  }
+  function commitLayout(lay){ BOARD.personal = {baseVersion: (BOARD.personal||{}).baseVersion != null ? BOARD.personal.baseVersion : BOARD.shared.version, layout: lay}; savePersonal(); renderBoard(); }
+  function commitScreenWidgets(widgets){
+    var lay = ensurePersonal(), id = currentScreen().id;
+    lay.screens.forEach(function(s){ if(s.id === id) s.widgets = widgets; });
+    commitLayout(lay);
+  }
+  function setEdit(on){
+    if(on && window.innerWidth < 1100) return;
+    editing = on; document.body.classList.toggle('editing', on);
+    $('#editBtn').setAttribute('aria-pressed', String(on)); $('#editBtn').textContent = on ? 'Done' : 'Edit';
+    if(on) ensurePersonal();
+    renderBoard();
+  }
+  $('#editBtn').addEventListener('click', function(){ setEdit(!editing); });
+
+  // per-widget tools: drag handle, remove, resize corner (added once to every panel)
+  $$('#board > [data-widget]').forEach(function(el){
+    var tools = document.createElement('div'); tools.className = 'w-tools';
+    tools.innerHTML = '<button class="w-drag" title="Drag to move (or focus and use arrow keys; Shift+arrows resize)" aria-label="Move '+esc(L.WIDGETS[el.dataset.widget].title)+'">⠿ Move</button>'+
+                      '<button class="w-remove" aria-label="Remove '+esc(L.WIDGETS[el.dataset.widget].title)+'">✕</button>';
+    var corner = document.createElement('div'); corner.className = 'w-resize'; corner.setAttribute('aria-hidden','true');
+    el.appendChild(tools); el.appendChild(corner);
+    tools.querySelector('.w-remove').addEventListener('click', function(){
+      var ws = currentScreen().widgets, i = ws.map(function(w){ return w.type; }).indexOf(el.dataset.widget);
+      if(i >= 0) commitScreenWidgets(L.removeWidget(ws, i));
+    });
+    tools.querySelector('.w-drag').addEventListener('pointerdown', function(e){ startPointer(e, el, 'move'); });
+    corner.addEventListener('pointerdown', function(e){ startPointer(e, el, 'resize'); });
+    tools.querySelector('.w-drag').addEventListener('keydown', function(e){
+      var d = {ArrowLeft:[-1,0], ArrowRight:[1,0], ArrowUp:[0,-1], ArrowDown:[0,1]}[e.key]; if(!d) return;
+      e.preventDefault();
+      var ws = currentScreen().widgets, i = ws.map(function(w){ return w.type; }).indexOf(el.dataset.widget), w = ws[i];
+      commitScreenWidgets(e.shiftKey ? L.resize(ws, i, w.w + d[0], w.h + d[1]) : L.move(ws, i, w.x + d[0], w.y + d[1]));
+      setTimeout(function(){ widgetEl(w.type).querySelector('.w-drag').focus(); }, 40);
+    });
+  });
+
+  function cellSize(){
+    var r = boardEl.getBoundingClientRect(), gap = 12;
+    return {left: r.left, top: r.top, colW: (r.width + gap) / 12, rowH: 40 + gap};
+  }
+  function startPointer(e, el, mode){
+    if(!editing) return;
+    e.preventDefault();
+    var ws = currentScreen().widgets, i = ws.map(function(w){ return w.type; }).indexOf(el.dataset.widget);
+    if(i < 0) return;
+    var start = {x: e.clientX, y: e.clientY, w: ws[i]}, c = cellSize(), preview = ws;
+    el.classList.add('ghost');
+    function onMove(ev){
+      var dx = Math.round((ev.clientX - start.x) / c.colW), dy = Math.round((ev.clientY - start.y) / c.rowH);
+      preview = mode === 'move' ? L.move(ws, i, start.w.x + dx, start.w.y + dy) : L.resize(ws, i, start.w.w + dx, start.w.h + dy);
+      preview.forEach(function(w){ var p = widgetEl(w.type); p.style.gridColumn = (w.x+1)+' / span '+w.w; p.style.gridRow = (w.y+1)+' / span '+w.h; });
+    }
+    function onUp(){
+      window.removeEventListener('pointermove', onMove); window.removeEventListener('pointerup', onUp);
+      el.classList.remove('ghost'); commitScreenWidgets(preview);
+    }
+    window.addEventListener('pointermove', onMove); window.addEventListener('pointerup', onUp);
+  }
+
+  // add-widget menu
+  $('#addWidgetBtn').addEventListener('click', function(ev){
+    var have = {}; currentScreen().widgets.forEach(function(w){ have[w.type] = 1; });
+    var free = Object.keys(L.WIDGETS).filter(function(t){ return !have[t]; });
+    var m = document.createElement('div'); m.className = 'add-menu'; m.setAttribute('role','menu');
+    m.innerHTML = free.length ? free.map(function(t){ return '<button role="menuitem" data-t="'+t+'">'+esc(L.WIDGETS[t].title)+'<small>'+esc(L.WIDGETS[t].desc)+'</small></button>'; }).join('')
+                              : '<div class="map-note" style="padding:8px">Every widget is already on this screen.</div>';
+    var r = ev.currentTarget.getBoundingClientRect(); m.style.left = r.left+'px'; m.style.top = (r.bottom+window.scrollY+4)+'px';
+    document.body.appendChild(m);
+    function close(){ if(m.parentNode) m.parentNode.removeChild(m); document.removeEventListener('click', outside, true); }
+    function outside(e){ if(!m.contains(e.target) && e.target !== ev.currentTarget) close(); }
+    setTimeout(function(){ document.addEventListener('click', outside, true); }, 0);
+    $$('button[data-t]', m).forEach(function(b){ b.addEventListener('click', function(){ commitScreenWidgets(L.addWidget(currentScreen().widgets, b.dataset.t)); close(); }); });
+    var first = m.querySelector('button'); if(first) first.focus();
+  });
+
+  // screen management
+  $('#addScreenBtn').addEventListener('click', function(){
+    var name = prompt('Name for the new screen:', 'New screen'); if(name === null) return;
+    try { var lay = L.addScreen(ensurePersonal(), name); commitLayout(lay); showScreen(lay.screens[lay.screens.length-1].id); } catch(e){ alert(e.message); }
+  });
+  $('#renameScreenBtn').addEventListener('click', function(){
+    var s = currentScreen(), name = prompt('Rename screen:', s.name); if(name) commitLayout(L.renameScreen(ensurePersonal(), s.id, name));
+  });
+  $('#wallScreenBtn').addEventListener('click', function(){
+    var lay = ensurePersonal(), id = currentScreen().id;
+    lay.screens.forEach(function(s){ if(s.id === id) s.wall = !s.wall; }); commitLayout(lay);
+  });
+  $('#screenLeftBtn').addEventListener('click', function(){ commitLayout(L.moveScreen(ensurePersonal(), currentScreen().id, -1)); });
+  $('#screenRightBtn').addEventListener('click', function(){ commitLayout(L.moveScreen(ensurePersonal(), currentScreen().id, 1)); });
+  $('#deleteScreenBtn').addEventListener('click', function(){
+    var s = currentScreen(); if(!confirm('Delete the screen "'+s.name+'"?')) return;
+    try { commitLayout(L.removeScreen(ensurePersonal(), s.id)); showScreen(activeLayout().screens[0].id); } catch(e){ alert(e.message); }
+  });
+  window.addEventListener('resize', function(){ if(editing && window.innerWidth < 1100) setEdit(false); });
+
   loadSharedLayout().catch(function(e){ $('#boardNotes').hidden = false; $('#boardNotes').textContent = 'Layout could not be loaded ('+e.message+'); showing every widget.'; });
 
   /* ---------- tooltip ---------- */

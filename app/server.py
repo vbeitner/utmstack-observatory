@@ -12,12 +12,13 @@ import urllib.error, urllib.request
 from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-VERSION = "1.2.6"
+VERSION = "1.3.0"
 HERE = os.path.dirname(os.path.abspath(__file__))
 if HERE not in sys.path:                          # the container runs "python3 -I", which leaves this folder off sys.path
     sys.path.insert(0, HERE)
 import layout_store  # noqa: E402  (needs the path above)
 import settings_store  # noqa: E402
+import reports  # noqa: E402
 
 
 def env(name, default=""):
@@ -64,6 +65,12 @@ def current_abuseipdb_key():
 
 def current_virustotal_key():
     return settings_store.get(DATA_DIR, "virustotal_key") or VIRUSTOTAL_KEY
+
+
+def current_report_hour():
+    """0-23 (UTC) to auto-generate a daily report at that hour, or None: scheduling is off until set."""
+    raw = settings_store.get(DATA_DIR, "report_hour")
+    return int(raw) if raw and raw.isdigit() and 0 <= int(raw) <= 23 else None
 
 
 _state = {"data": {"error": "starting"}, "cid": None}
@@ -270,7 +277,7 @@ def collect(hours=24):
     alerts = os_call("/v11-alert-*/_search", {
         "size": 14, "track_total_hits": True, "query": rng(span), "sort": [{"@timestamp": "desc"}],
         "_source": ["@timestamp", "name", "severityLabel", "dataSource", "dataType", "statusLabel",
-                    "description", "events", "target", "adversary"],
+                    "description", "events", "target", "adversary", "technique"],
         "aggs": {
             "sev": {"terms": {"field": "severityLabel.keyword"}},
             "rules": {"terms": {"field": "name.keyword", "size": 5},
@@ -313,10 +320,12 @@ def collect(hours=24):
         adv, tgt = s.get("adversary") or {}, s.get("target") or {}
         origin = ev0.get("origin") or {}
         ip, loc = alert_ip_loc(adv, origin, tgt)
+        technique = s.get("technique") or ""
         return {"id": h["_id"], "t": s.get("@timestamp"), "sev": s.get("severityLabel") or "Low",
                 "source": s.get("dataSource") or s.get("dataType") or "-", "name": s.get("name") or "-",
                 "status": s.get("statusLabel") or "Open", "desc": s.get("description") or "",
-                "affected": len(evs), "ip": ip, "lat": loc[0], "lon": loc[1]}
+                "affected": len(evs), "ip": ip, "lat": loc[0], "lon": loc[1],
+                "technique": technique if technique != "Indeterminate" else ""}
 
     return {
         "now": datetime.now(timezone.utc).isoformat(),
@@ -510,6 +519,43 @@ def api_storage():
             "note": "Sizes are primary shards in OpenSearch; index days are UTC. A day is final once its index is closed out."}
 
 
+def build_report_data(hours=24):
+    """Everything reports.render_html()/render_pdf() need, reusing the same aggregations the dashboard itself uses."""
+    hours = hours if hours in RANGES_H else 24
+    d = data_for(hours)
+    geo = build_geo(min(hours * 3600, 86400))
+    store = api_storage()
+    return {
+        "generated_at": datetime.now(timezone.utc).isoformat(), "range_h": hours, "host": HOST_NAME,
+        "kpi": d["kpi"], "rules": d["rules"], "alerts": d["alerts"],
+        "geo": {"per_min": geo["per_min"], "denied": geo["denied"], "total": geo["total"],
+                "window_s": geo["window_s"], "countries": geo["countries"][:10]},
+        "storage": {"disk_free": store["disk_free"], "disk_total": store["disk_total"],
+                    "days_left": store["days_left"], "avg_daily_total": store["avg_daily_total"]},
+    }
+
+
+def generate_report(hours=24):
+    return reports.generate(DATA_DIR, build_report_data(hours))
+
+
+_last_report_day = None
+
+
+def report_loop():
+    global _last_report_day
+    while True:
+        try:
+            hour = current_report_hour()
+            today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+            if hour is not None and datetime.now(timezone.utc).hour == hour and _last_report_day != today:
+                generate_report()
+                _last_report_day = today
+        except Exception as e:
+            print("scheduled report failed:", str(e)[:200], flush=True)
+        time.sleep(60)
+
+
 def history_loop():
     while True:
         try:
@@ -674,9 +720,11 @@ def alert_summary(h):
     ev0 = evs[0] if evs else {}
     adv, tgt, origin = s.get("adversary") or {}, s.get("target") or {}, ev0.get("origin") or {}
     ip, loc = alert_ip_loc(adv, origin, tgt)
+    technique = s.get("technique") or ""
     return {"id": h["_id"], "t": s.get("@timestamp"), "sev": s.get("severityLabel") or "Low", "name": s.get("name") or "-",
             "source": s.get("dataSource") or "-", "type": s.get("dataType") or "", "status": s.get("statusLabel") or "Open",
-            "ip": ip, "affected": len(evs), "category": s.get("category") or "", "lat": loc[0], "lon": loc[1]}
+            "ip": ip, "affected": len(evs), "category": s.get("category") or "", "lat": loc[0], "lon": loc[1],
+            "technique": technique if technique != "Indeterminate" else ""}
 
 
 def api_alerts(p):
@@ -695,7 +743,7 @@ def api_alerts(p):
     r = os_call("/v11-alert-*/_search" + IX, {
         "size": size, "from": frm, "track_total_hits": True, "query": {"bool": {"filter": flt}},
         "sort": [{"@timestamp": "desc"}],
-        "_source": ["@timestamp", "name", "severityLabel", "dataSource", "dataType", "statusLabel", "events", "adversary", "target", "category"],
+        "_source": ["@timestamp", "name", "severityLabel", "dataSource", "dataType", "statusLabel", "events", "adversary", "target", "category", "technique"],
         "aggs": {"sev": {"terms": {"field": "severityLabel.keyword"}},
                  "sources": {"terms": {"field": "dataSource.keyword", "size": 30}},
                  "rules": {"terms": {"field": "name.keyword", "size": 30}}}})
@@ -1415,6 +1463,12 @@ def validate_settings_patch(patch):
         for p in patch["ai_hosts"].split(","):
             if p.strip() and "=" not in p:
                 raise ValueError("ai_hosts must be 'name=ip,name=ip'")
+    if patch.get("report_hour"):
+        try:
+            if not 0 <= int(patch["report_hour"]) <= 23:
+                raise ValueError
+        except ValueError:
+            raise ValueError("report_hour must be 0-23")
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -1505,6 +1559,7 @@ class Handler(BaseHTTPRequestHandler):
             "/api/reputation": lambda: api_reputation(p.get("ip", "")[:64]),
             "/api/support": lambda: api_support(p.get("anon") == "1"),
             "/api/settings": lambda: api_settings(),
+            "/api/reports": lambda: {"reports": reports.list_reports(DATA_DIR), "report_hour": current_report_hour()},
             "/api/geo": lambda: api_geo(int(p["window"]) if p.get("window", "").isdigit() else 60,
                                         p.get("anon") == "1"),
         }
@@ -1537,6 +1592,15 @@ class Handler(BaseHTTPRequestHandler):
         elif u.path == "/land.json":                  # static world outline for the live map
             with open(os.path.join(HERE, "land.json"), "rb") as f:
                 self.send(200, "application/json", f.read(), {"Cache-Control": "private, max-age=86400"})
+        elif u.path.startswith("/api/reports/"):
+            fname = u.path[len("/api/reports/"):]
+            path = reports.safe_path(DATA_DIR, fname)
+            if not path or not os.path.exists(path):
+                self.send(404, "text/plain", b"not found")
+                return
+            ctype = "application/pdf" if fname.endswith(".pdf") else "text/html; charset=utf-8"
+            with open(path, "rb") as f:
+                self.send(200, ctype, f.read(), {"Content-Disposition": 'attachment; filename="%s"' % fname})
         elif u.path in ("/", "/index.html"):
             with open(os.path.join(HERE, "index.html"), "rb") as f:
                 self.send(200, "text/html; charset=utf-8", f.read())
@@ -1583,6 +1647,36 @@ class Handler(BaseHTTPRequestHandler):
         except ValueError as e:
             self.send(400, "application/json", json.dumps({"error": str(e)[:200]}).encode())
 
+    def do_POST(self):
+        u = urlparse(self.path)
+        if not self.gate():
+            return
+        if u.path != "/api/reports/generate":
+            self.send(404, "text/plain", b"not found")
+            return
+        try:
+            n = int(self.headers.get("Content-Length") or 0)
+        except ValueError:
+            n = -1
+        if not 0 <= n <= 4096:
+            self.send(400, "application/json", b'{"error":"request too large or missing length"}')
+            self.close_connection = True
+            return
+        self.rfile.read(n)                         # always consume the body, or a rejected request resets the socket
+        if not layout_store.csrf_ok(self.headers):
+            self.send(403, "application/json", b'{"error":"forbidden"}')
+            return
+        p = {k: v[0] for k, v in parse_qs(u.query).items()}
+        try:
+            hours = int(p.get("hours", "24"))
+        except ValueError:
+            hours = 24
+        try:
+            meta = generate_report(hours)
+            self.send(200, "application/json", json.dumps(meta).encode())
+        except Exception as e:
+            self.send(500, "application/json", json.dumps({"error": str(e)[:300]}).encode())
+
 
 class Server(ThreadingHTTPServer):
     """Caps concurrent connections instead of spawning an unbounded thread per accept. tls_context, when set,
@@ -1617,6 +1711,7 @@ if __name__ == "__main__":
     threading.Thread(target=refresher, daemon=True).start()
     threading.Thread(target=history_loop, daemon=True).start()
     threading.Thread(target=lag_loop, daemon=True).start()
+    threading.Thread(target=report_loop, daemon=True).start()
     srv = Server((BIND, PORT), Handler)
     scheme = "http"
     if TLS_CERT and TLS_KEY:

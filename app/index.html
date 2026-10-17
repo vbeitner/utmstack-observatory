@@ -387,6 +387,8 @@ body.paused .mark-core,body.paused .tk.new,body.paused .live-dot{animation-play-
       <button class="ctl" id="wallBtn" aria-pressed="false" title="Wall display: full screen, client names hidden, views rotate every 30 s (Esc exits)">Wall</button>
       <button class="ctl" id="trendsBtn" title="30-day history with daily and weekly comparisons">
         <svg width="13" height="13" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.3" aria-hidden="true"><path d="M1.5 12.5h11M3 10V6.5M6 10V3.5M9 10V7.5M12 10V5"/></svg>Trends · 30 d</button>
+      <button class="ctl" id="reportsBtn" title="PDF/HTML security reports" aria-haspopup="dialog">
+        <svg width="13" height="13" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.3" aria-hidden="true"><path d="M3 1.5h5.5L11 4v8.5a.5.5 0 0 1-.5.5h-7a.5.5 0 0 1-.5-.5v-10a.5.5 0 0 1 .5-.5Z"/><path d="M3.5 6.5h6M3.5 8.5h6M3.5 10.5h4"/></svg>Reports</button>
       <button class="ctl icon" id="settingsBtn" title="Settings" aria-label="Settings" aria-haspopup="dialog"><svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.3" aria-hidden="true"><circle cx="7" cy="7" r="2.3"/><path d="M7 1.2v1.6M7 11.2v1.6M1.2 7h1.6M11.2 7h1.6M2.9 2.9l1.1 1.1M9.9 9.9l1.1 1.1M2.9 11.1l1.1-1.1M9.9 4.1l1.1-1.1"/></svg></button>
       <button class="ctl icon" id="fsBtn" title="Fullscreen" aria-label="Toggle fullscreen"><svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.3" aria-hidden="true"><path d="M1.5 5V1.5H5M9 1.5h3.5V5M12.5 9v3.5H9M5 12.5H1.5V9"/></svg></button>
     </div>
@@ -582,6 +584,15 @@ body.paused .mark-core,body.paused .tk.new,body.paused .live-dot{animation-play-
     <button class="ctl icon" id="closeSet" aria-label="Close settings"><svg width="13" height="13" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.3" aria-hidden="true"><path d="M2 2l10 10M12 2L2 12"/></svg></button>
   </div>
   <div class="drawer-body" id="setBody"><div class="empty">Loading…</div></div>
+</aside>
+
+<aside class="drawer" id="repDrawer" role="dialog" aria-modal="true" aria-labelledby="repTitle" aria-hidden="true">
+  <div class="drawer-head">
+    <div><h2 id="repTitle">Reports</h2><div class="panel-meta">UTMStack Observatory</div></div>
+    <span class="spacer"></span>
+    <button class="ctl icon" id="closeRep" aria-label="Close reports"><svg width="13" height="13" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.3" aria-hidden="true"><path d="M2 2l10 10M12 2L2 12"/></svg></button>
+  </div>
+  <div class="drawer-body" id="repBody"><div class="empty">Loading…</div></div>
 </aside>
 
 <script src="/layout.js"></script>
@@ -2084,6 +2095,8 @@ body.paused .mark-core,body.paused .tk.new,body.paused .live-dot{animation-play-
       field('setSites', 'Site pins', s.sites, 'Format: Name=lat,lon,City;1.2.3.4=lat,lon;...', {maxlength:2000}) +
       '<h3 class="tl-title">AI traffic</h3>'+
       field('setAi', 'AI hosts', s.ai_hosts, 'Format: name=ip,name=ip — needs Sophos XG firewall logs in UTMStack', {maxlength:2000}) +
+      '<h3 class="tl-title">Reports</h3>'+
+      field('setReportHour', 'Daily report hour (UTC)', s.report_hour, 'A number 0–23. Leave blank for on-demand only (Reports button, top right).', {maxlength:2}) +
       '<h3 class="tl-title">Dashboard layout</h3>'+
       '<div class="drawer-foot"><button class="ghost-btn" id="setOpenLayout">Open layout editor</button>'+
       '<span class="hint">Widgets, screens and the wall rotation have their own editor (Edit, top right of the tab bar).</span></div>'+
@@ -2092,7 +2105,8 @@ body.paused .mark-core,body.paused .tk.new,body.paused .live-dot{animation-play-
     $('#setOpenLayout').addEventListener('click', function(){ closeSettings(); setEdit(true); });
     $('#setSave').addEventListener('click', function(){
       var patch = {dash_user: $('#setUser').value.trim(), support: $('#setSupport').value.trim(),
-                   home: $('#setHome').value.trim(), sites: $('#setSites').value.trim(), ai_hosts: $('#setAi').value.trim()};
+                   home: $('#setHome').value.trim(), sites: $('#setSites').value.trim(), ai_hosts: $('#setAi').value.trim(),
+                   report_hour: $('#setReportHour').value.trim()};
       if($('#setPass').value) patch.dash_pass = $('#setPass').value;
       if($('#setAbuse').value) patch.abuseipdb_key = $('#setAbuse').value;
       if($('#setVt').value) patch.virustotal_key = $('#setVt').value;
@@ -2131,6 +2145,55 @@ body.paused .mark-core,body.paused .tk.new,body.paused .live-dot{animation-play-
   $('#closeSet').addEventListener('click', closeSettings);
   overlay.addEventListener('click', function(){ if(setDrawer.classList.contains('on')) closeSettings(); });
   document.addEventListener('keydown', function(e){ if(e.key==='Escape' && setDrawer.classList.contains('on')) closeSettings(); });
+
+  /* ---- reports drawer: PDF/HTML downloads, generate on demand ---- */
+  var repDrawer = $('#repDrawer');
+  function fmtBytes(n){
+    if(n>=1e9) return (n/1e9).toFixed(1)+' GB'; if(n>=1e6) return (n/1e6).toFixed(1)+' MB';
+    if(n>=1e3) return (n/1e3).toFixed(0)+' KB'; return n+' B';
+  }
+  function renderReports(d){
+    var hourNote = d.report_hour!=null ? ('Scheduled daily at '+String(d.report_hour).padStart(2,'0')+':00 UTC.') : 'No daily schedule set.';
+    var html = '<div class="drawer-foot"><button class="ctl" id="repGenerate">Generate now</button>'+
+      '<span class="hint">'+esc(hourNote)+' Set it in Settings.</span></div>';
+    html += d.reports.length ? '<table class="cmp"><thead><tr><th>Generated</th><th>PDF</th><th>HTML</th></tr></thead><tbody>'+
+      d.reports.map(function(r){
+        return '<tr><td>'+fmtDT(r.generated_at)+'</td>'+
+          '<td>'+(r.pdf?'<a href="/api/reports/'+encodeURIComponent(r.pdf.name)+'">Download ('+fmtBytes(r.pdf.bytes)+')</a>':'–')+'</td>'+
+          '<td>'+(r.html?'<a href="/api/reports/'+encodeURIComponent(r.html.name)+'">Download ('+fmtBytes(r.html.bytes)+')</a>':'–')+'</td></tr>';
+      }).join('')+'</tbody></table>' : '<div class="empty">No reports yet.</div>';
+    $('#repBody').innerHTML = html;
+    $('#repGenerate').addEventListener('click', function(){
+      var btn = $('#repGenerate'); btn.disabled = true; btn.textContent = 'Generating…';
+      fetch('/api/reports/generate', {method: 'POST', cache: 'no-store',
+        headers: {'Content-Type': 'application/json', 'X-Observatory': '1'}})
+        .then(function(r){ return r.json().then(function(j){ return {status: r.status, j: j}; }); })
+        .then(function(res){
+          if(res.status !== 200){ btn.disabled = false; btn.textContent = 'Generate now'; alert('Generate failed: '+(res.j.error||res.status)); return; }
+          loadReports();
+        }).catch(function(e){ btn.disabled = false; btn.textContent = 'Generate now'; alert('Generate failed: '+e.message); });
+    });
+  }
+  function loadReports(){
+    $('#repBody').innerHTML = '<div class="empty">Loading…</div>';
+    fetch('/api/reports', {cache: 'no-store'}).then(function(r){ return r.json(); })
+      .then(renderReports)
+      .catch(function(e){ $('#repBody').innerHTML = '<div class="empty">Could not load: '+esc(e.message)+'</div>'; });
+  }
+  function openReports(){
+    overlay.classList.add('on'); repDrawer.classList.add('on'); repDrawer.setAttribute('aria-hidden','false');
+    loadReports();
+    setTimeout(function(){ $('#closeRep').focus(); }, 60);
+  }
+  function closeReports(){
+    repDrawer.classList.remove('on'); repDrawer.setAttribute('aria-hidden','true');
+    if(!document.querySelector('.drawer.on')) overlay.classList.remove('on');
+    $('#reportsBtn').focus();
+  }
+  $('#reportsBtn').addEventListener('click', openReports);
+  $('#closeRep').addEventListener('click', closeReports);
+  overlay.addEventListener('click', function(){ if(repDrawer.classList.contains('on')) closeReports(); });
+  document.addEventListener('keydown', function(e){ if(e.key==='Escape' && repDrawer.classList.contains('on')) closeReports(); });
 
   /* ---- entry points: KPI cards, alert table, storage footer ---- */
   $('#kpiBand').addEventListener('click', function(e){

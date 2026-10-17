@@ -1155,6 +1155,7 @@ body.editing .edit-bar{display:flex}
       }
       var n = $('#boardNotes'); n.hidden = !BOARD.notes.length; n.textContent = BOARD.notes.join(' ');
       renderBoard();
+      renderLayoutState();
       if(!loadSharedLayout.done){ loadSharedLayout.done = 1; if(/[?&]wall=1\b/.test(location.search)) setWall(true); }
     });
   }
@@ -1264,6 +1265,49 @@ body.editing .edit-bar{display:flex}
     try { commitLayout(L.removeScreen(ensurePersonal(), s.id)); showScreen(activeLayout().screens[0].id); } catch(e){ alert(e.message); }
   });
   window.addEventListener('resize', function(){ if(editing && window.innerWidth < 1100) setEdit(false); });
+
+  /* ---------- personal vs shared layout ---------- */
+  // savePersonal() is defined in the edit-mode block (Task 5) and calls renderLayoutState() below once it exists.
+  function resetToShared(){
+    BOARD.personal = null; try { localStorage.removeItem('obsPersonalLayout'); } catch(e){}
+    renderLayoutState(); renderBoard();
+  }
+  function saveAsShared(){
+    var lay = activeLayout();
+    return fetch('/api/layout', {method: 'PUT', cache: 'no-store',
+      headers: {'Content-Type': 'application/json', 'X-Observatory': '1'},
+      body: JSON.stringify({layout: lay, base_version: BOARD.shared.version})})
+    .then(function(r){ return r.json().then(function(j){ return {status: r.status, j: j}; }); })
+    .then(function(res){
+      if(res.status === 409){
+        if(confirm('Someone saved a different shared layout since you started. Replace it with yours?')){
+          BOARD.shared = L.sanitizeLayout(res.j.layout).layout;
+          return saveAsShared();
+        }
+        return;
+      }
+      if(res.status !== 200) throw new Error(res.j.error || ('HTTP '+res.status));
+      BOARD.shared = L.sanitizeLayout(res.j.layout).layout;
+      resetToShared();
+      toastLayout('Saved as the shared layout (version '+BOARD.shared.version+').');
+    }).catch(function(e){ toastLayout('Could not save: '+e.message); });
+  }
+  function toastLayout(msg){ var n = $('#boardNotes'); n.hidden = false; n.textContent = msg; clearTimeout(toastLayout.t); toastLayout.t = setTimeout(function(){ n.hidden = !BOARD.notes.length; n.textContent = BOARD.notes.join(' '); }, 6000); }
+  function renderLayoutState(){
+    var el = $('#layoutState');
+    if(!BOARD.personal){ el.innerHTML = 'Shared layout'; return; }
+    var stale = BOARD.shared && L.isPersonalStale(BOARD.personal, BOARD.shared);
+    el.innerHTML = 'Personal layout'+(stale ? ' · <span class="warn">shared layout changed since</span>' : '')+
+      ' · <button class="txt-btn" id="resetShared">Reset to shared</button>'+
+      ' <button class="txt-btn" id="saveShared">Save as shared default</button>';
+    $('#resetShared').addEventListener('click', function(){ if(confirm('Discard your personal layout and use the shared one?')) resetToShared(); });
+    $('#saveShared').addEventListener('click', function(){
+      var q = stale ? 'The shared layout was changed after you started your personal one. Saving replaces that newer version for everyone, including the wall screen. Continue?'
+                    : 'Make your layout the shared default for everyone, including the wall screen?';
+      if(confirm(q)) saveAsShared();
+    });
+  }
+  setInterval(function(){ if(!editing) loadSharedLayout().catch(function(){}); }, 60000);
 
   loadSharedLayout().catch(function(e){ $('#boardNotes').hidden = false; $('#boardNotes').textContent = 'Layout could not be loaded ('+e.message+'); showing every widget.'; });
 

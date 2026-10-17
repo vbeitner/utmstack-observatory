@@ -1,5 +1,23 @@
 # Release notes
 
+## 1.2.4 — 2026-10-17
+
+**For users**
+- No visible change to the dashboard. This release hardens the server against abuse: repeated wrong-password
+  attempts from one address now get locked out for 15 minutes, a flood of connections is refused cleanly instead of
+  piling up, and an HTTPS connection no longer lets one slow or idle client stall everyone else's page load.
+
+**Technical**
+- Login: per-IP failure tracking with a 5-attempt/15-minute lockout (`LOGIN_MAX_FAILURES`, `LOGIN_LOCK_S`), serialized
+  so parallel guesses can't race past the limit; a success resets the counter; `/healthz` is never gated.
+- Connections: new `MAX_CONNECTIONS` caps concurrent connections via a semaphore in `process_request`/
+  `shutdown_request`; over the cap, new connections are closed immediately rather than queued as unbounded threads.
+- TLS: the handshake now happens per-connection in `Handler.setup()` instead of on the listening socket, so one
+  client's handshake (or an idle non-TLS connection) can no longer block every other client's accept. Responses over
+  TLS now send `Strict-Transport-Security`.
+- `Server` header no longer reveals the Python/BaseHTTP version; `REQUEST_TIMEOUT_S` (default 15s) drops idle/slow
+  clients instead of holding a thread open indefinitely. Tests: 54 Python + 13 JS.
+
 ## 1.2.3 — 2026-10-17
 
 **For users**

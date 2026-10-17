@@ -12,7 +12,7 @@ import urllib.error, urllib.request
 from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-VERSION = "1.2.3"
+VERSION = "1.2.4"
 HERE = os.path.dirname(os.path.abspath(__file__))
 if HERE not in sys.path:                          # the container runs "python3 -I", which leaves this folder off sys.path
     sys.path.insert(0, HERE)
@@ -42,6 +42,8 @@ DISK_PATH = env("DISK_PATH", "/utmstack" if os.path.isdir("/utmstack") else "/")
 HOST_NAME = env("HOST_NAME") or os.uname().nodename
 TRANSPORT = "http" if OS_URL else "docker-exec"
 REFRESH_S = 4
+REQUEST_TIMEOUT_S = float(env("REQUEST_TIMEOUT_S", "15"))
+MAX_CONNECTIONS = int(env("MAX_CONNECTIONS", "0") or "0")   # 0 = unlimited
 DOCKER = ["sudo", "-n", "docker"]               # docker-exec transport only (bare-metal installs)
 
 _state = {"data": {"error": "starting"}, "cid": None}
@@ -1218,12 +1220,55 @@ def refresher():
         time.sleep(max(0.5, REFRESH_S - (time.time() - t0)))
 
 
+# ---------------------------------------------------------------- login lockout (per client IP)
+LOGIN_MAX_FAILURES = int(env("LOGIN_MAX_FAILURES", "5"))
+LOGIN_LOCK_S = float(env("LOGIN_LOCK_S", "900"))
+_logins = {}                                     # ip -> {"fails": [t, ...], "until": t}
+_logins_lock = threading.Lock()
+
+
+def login_attempt(ip, check):
+    """Run the (microsecond) password check and the failure bookkeeping as one atomic step per server, so parallel
+    guesses are serialised: after LOGIN_MAX_FAILURES wrong ones the address is locked, even for the right password.
+    Returns (ok, seconds_locked)."""
+    now = time.time()
+    with _logins_lock:
+        if len(_logins) > 10000:                 # bound memory under a spray from many addresses
+            for k in [k for k, v in _logins.items() if v["until"] < now][:5000]:
+                del _logins[k]
+        st = _logins.setdefault(ip, {"fails": [], "until": 0.0})
+        if st["until"] > now:
+            return False, st["until"] - now
+        ok = check()
+        if ok:
+            st["fails"] = []
+            return True, 0
+        st["fails"] = [t for t in st["fails"] if now - t < LOGIN_LOCK_S] + [now]
+        if len(st["fails"]) >= LOGIN_MAX_FAILURES:
+            st["until"] = now + LOGIN_LOCK_S
+            print("login: %s locked for %d s after %d failed logins" % (ip, LOGIN_LOCK_S, len(st["fails"])), flush=True)
+        return False, 0
+
+
 _layout_lock = threading.Lock()                  # one writer at a time; version check + save are atomic together
 
 
 class Handler(BaseHTTPRequestHandler):
+    server_version = "UTMStack-Observatory"     # no Python / BaseHTTP version in the Server header
+    sys_version = ""
+    timeout = REQUEST_TIMEOUT_S                 # idle or slow clients are dropped instead of holding a thread forever
+
     def log_message(self, *a):
         pass
+
+    def setup(self):
+        """Do the TLS handshake here, in this connection's own thread — not on the listening socket, which
+        would serialise every client's handshake behind the accept loop (one slow/idle client stalls all)."""
+        ctx = getattr(self.server, "tls_context", None)
+        if ctx:
+            self.request.settimeout(self.timeout)
+            self.request = ctx.wrap_socket(self.request, server_side=True)
+        super().setup()
 
     def send(self, code, ctype, body, extra=None):
         self.send_response(code)
@@ -1234,10 +1279,33 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Referrer-Policy", "no-referrer")
         self.send_header("Content-Security-Policy", "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'unsafe-inline'; "
                          "img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'")
+        if isinstance(self.connection, ssl.SSLSocket):
+            self.send_header("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
         for k, v in (extra or {}).items():
             self.send_header(k, v)
         self.end_headers()
         self.wfile.write(body)
+
+    def gate(self):
+        """Authenticate the request with a per-IP lockout. Sends the 401/429 itself; returns True when allowed.
+        Requests without credentials (a browser's first try) do not count as failures."""
+        if not DASH_PASS:
+            return True
+        ip = self.client_address[0]
+        has_creds = bool(self.headers.get("Authorization"))
+        if has_creds:
+            ok, wait = login_attempt(ip, self.authorized)
+            if wait:
+                self.send(429, "text/plain", b"Too many failed logins from this address. Try again later.",
+                          {"Retry-After": str(int(wait) + 1)})
+                return False
+            if ok:
+                return True
+            print("login: failed login from %s" % ip, flush=True)
+            time.sleep(0.5)                           # slow down password guessing
+        self.send(401, "text/plain", b"Authentication required",
+                  {"WWW-Authenticate": 'Basic realm="UTMStack Observatory", charset="UTF-8"'})
+        return False
 
     def authorized(self):
         if not DASH_PASS:
@@ -1258,10 +1326,7 @@ class Handler(BaseHTTPRequestHandler):
         if u.path == "/healthz":                      # liveness only; no data, no auth
             self.send(200, "text/plain", b"ok")
             return
-        if not self.authorized():
-            time.sleep(0.5)                           # slow down password guessing
-            self.send(401, "text/plain", b"Authentication required",
-                      {"WWW-Authenticate": 'Basic realm="UTMStack Observatory", charset="UTF-8"'})
+        if not self.gate():
             return
         p = {k: v[0] for k, v in parse_qs(u.query).items()}
         routes = {
@@ -1314,10 +1379,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_PUT(self):
         u = urlparse(self.path)
-        if not self.authorized():
-            time.sleep(0.5)
-            self.send(401, "text/plain", b"Authentication required",
-                      {"WWW-Authenticate": 'Basic realm="UTMStack Observatory", charset="UTF-8"'})
+        if not self.gate():
             return
         if u.path != "/api/layout":
             self.send(404, "text/plain", b"not found")
@@ -1349,6 +1411,30 @@ class Handler(BaseHTTPRequestHandler):
             self.send(400, "application/json", json.dumps({"error": str(e)[:200]}).encode())
 
 
+class Server(ThreadingHTTPServer):
+    """Caps concurrent connections instead of spawning an unbounded thread per accept. tls_context, when set,
+    is applied per-connection by Handler.setup() rather than to the listening socket (see setup() for why)."""
+    tls_context = None
+
+    def __init__(self, *a, **kw):
+        super().__init__(*a, **kw)
+        self._conn_slots = threading.Semaphore(MAX_CONNECTIONS) if MAX_CONNECTIONS else None
+
+    def process_request(self, request, client_address):
+        if self._conn_slots is not None and not self._conn_slots.acquire(blocking=False):
+            try:
+                request.close()
+            except OSError:
+                pass
+            return
+        super().process_request(request, client_address)
+
+    def shutdown_request(self, request):
+        super().shutdown_request(request)
+        if self._conn_slots is not None:
+            self._conn_slots.release()
+
+
 if __name__ == "__main__":
     if TRANSPORT == "docker-exec" and not OS_PASS:
         OS_PASS = get_password()
@@ -1358,13 +1444,13 @@ if __name__ == "__main__":
     threading.Thread(target=refresher, daemon=True).start()
     threading.Thread(target=history_loop, daemon=True).start()
     threading.Thread(target=lag_loop, daemon=True).start()
-    srv = ThreadingHTTPServer((BIND, PORT), Handler)
+    srv = Server((BIND, PORT), Handler)
     scheme = "http"
     if TLS_CERT and TLS_KEY:
         tls = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
         tls.minimum_version = ssl.TLSVersion.TLSv1_2
         tls.load_cert_chain(TLS_CERT, TLS_KEY)
-        srv.socket = tls.wrap_socket(srv.socket, server_side=True)
+        srv.tls_context = tls
         scheme = "https"
     print("UTMStack Observatory %s on %s://%s:%d  (opensearch via %s, login %s, data %s)" % (
         VERSION, scheme, BIND, PORT, "direct" if TRANSPORT == "http" else "docker-exec", "on" if DASH_PASS else "OFF", DATA_DIR), flush=True)

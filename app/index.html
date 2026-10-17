@@ -293,9 +293,12 @@ details.ev .kvt{margin:4px 0 8px}
   .map-side{border-left:0;border-top:1px solid var(--border)}
 }
 /* ---------- wall display mode ---------- */
-body.wall .shell{height:100dvh;min-height:0;grid-template-rows:72px minmax(0,1fr)}
-body.wall .shell>*{display:none}
-body.wall .shell>.hdr{display:grid}
+body.wall .shell{height:100dvh;min-height:0;overflow:hidden}
+body.wall #tabbar,body.wall #boardNotes{display:none}
+body.wall .board{grid-auto-rows:calc((100dvh - 132px - 17 * 12px) / 18)}
+body.wall .board>[data-wall-hidden]>*{visibility:hidden}
+body.wall .board>[data-wall-hidden]::after{content:"Hidden on the wall screen: contains client names";position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font-family:var(--mono);font-size:13px;color:var(--muted);border:1px dashed var(--border-strong)}
+.board>[data-widget]{position:relative}
 body.wall #kSrcSec{visibility:hidden}
 body.wall .map-body{grid-template-columns:minmax(0,1fr) 380px}
 body.wall .map-stats .v{font-size:40px}
@@ -1057,24 +1060,27 @@ body.wall #rangeSeg,body.wall #trendsBtn,body.wall #mapWin{display:none}
   mapCv.addEventListener('mouseleave', function(){ mapTip.classList.remove('on'); });
 
   /* ---------- wall display mode ---------- */
-  var wallOn = false, wallTimer = null, WALL_VIEWS = ['map','trend'], wallIdx = 0;
-  function wallView(){
-    document.body.dataset.view = WALL_VIEWS[wallIdx];
-    setTimeout(function(){ landCache = null; if(D) apply(D); drawMap(performance.now()); }, 60);
+  var wallOn = false, wallTimer = null, wallIdx = 0, preWallScreen = null;
+  function wallScreens(){
+    var ids = (BOARD.shared ? BOARD.shared.screens : []).filter(function(s){ return s.wall; }).map(function(s){ return s.id; });
+    return ids.length ? ids : (BOARD.shared ? [BOARD.shared.screens[0].id] : []);
+  }
+  function wallStep(){
+    var ids = wallScreens(); if(!ids.length) return;
+    wallIdx = wallIdx % ids.length; showScreen(ids[wallIdx]); wallIdx++;
   }
   function setWall(on){
     wallOn = on; mapAnon = on;
     document.body.classList.toggle('wall', on);
     $('#wallBtn').setAttribute('aria-pressed', String(on));
     clearInterval(wallTimer);
-    if(on){ wallIdx = 0; wallView(); wallTimer = setInterval(function(){ wallIdx = (wallIdx+1) % WALL_VIEWS.length; wallView(); }, 30000); }
-    else { delete document.body.dataset.view; setTimeout(function(){ landCache = null; if(D) apply(D); drawMap(performance.now()); }, 60); }
+    if(on){ preWallScreen = BOARD.screenId; wallIdx = 0; wallStep(); wallTimer = setInterval(wallStep, 30000); }
+    else if(BOARD.shared){ showScreen(preWallScreen || activeLayout().screens[0].id); }
     try { var u = new URL(location.href); if(on) u.searchParams.set('wall','1'); else u.searchParams.delete('wall'); history.replaceState(null,'',u); } catch(e){}
     G = null; pollGeo();
   }
   $('#wallBtn').addEventListener('click', function(){ setWall(!wallOn); if(wallOn && document.documentElement.requestFullscreen) document.documentElement.requestFullscreen().catch(function(){}); });
   document.addEventListener('keydown', function(e){ if(e.key==='Escape' && wallOn && !document.querySelector('.drawer.on')) setWall(false); });
-  if(/[?&]wall=1\b/.test(location.search)) setWall(true);
 
   /* ---------- widget board: screens and placement ---------- */
   var L = window.ObsLayout, boardEl = $('#board');
@@ -1100,6 +1106,7 @@ body.wall #rangeSeg,body.wall #trendsBtn,body.wall #mapWin{display:none}
     s.widgets.forEach(function(w){
       var el = widgetEl(w.type); if(!el) return;
       on[w.type] = 1; el.hidden = false;
+      if(wallOn && L.WIDGETS[w.type].wallSafe === false) el.setAttribute('data-wall-hidden',''); else el.removeAttribute('data-wall-hidden');
       el.style.gridColumn = (w.x+1)+' / span '+w.w; el.style.gridRow = (w.y+1)+' / span '+w.h;
       el.style.order = String(w.y*100 + w.x);          // reading order for the single-column (mobile) view
     });
@@ -1121,6 +1128,7 @@ body.wall #rangeSeg,body.wall #trendsBtn,body.wall #mapWin{display:none}
       }
       var n = $('#boardNotes'); n.hidden = !BOARD.notes.length; n.textContent = BOARD.notes.join(' ');
       renderBoard();
+      if(!loadSharedLayout.done){ loadSharedLayout.done = 1; if(/[?&]wall=1\b/.test(location.search)) setWall(true); }
     });
   }
   window.addEventListener('resize', function(){ if(BOARD.shared) renderBoard(); });

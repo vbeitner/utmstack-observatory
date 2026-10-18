@@ -272,12 +272,16 @@ details.ev .kvt{margin:4px 0 8px}
 }
 /* ---------- live firewall map ---------- */
 .map-panel{display:flex;flex-direction:column;min-height:0;overflow:hidden}
-.map-body{flex:1;min-height:0;display:grid;grid-template-columns:minmax(0,1fr) 310px}
-.map-wrap{position:relative;min-height:0;overflow:hidden;background:radial-gradient(ellipse at 50% 40%,#0B1622 0%,var(--canvas) 75%)}
+.map-filters{gap:10px;flex-wrap:wrap;padding-top:0}
+.map-body{flex:1;min-height:0;display:flex}
+.map-wrap{position:relative;flex:1;min-height:0;overflow:hidden;background:radial-gradient(ellipse at 50% 40%,#0B1622 0%,var(--canvas) 75%)}
 .map-wrap canvas{position:absolute;inset:0;width:100%;height:100%;display:block}
 .map-legend{position:absolute;left:12px;bottom:10px;display:flex;flex-wrap:wrap;gap:14px;font-family:var(--mono);font-size:11.5px;color:var(--ink2);background:rgba(7,10,15,.78);border:1px solid var(--border);padding:5px 9px}
 .map-legend i{display:inline-block;width:14px;height:2px;margin-right:6px;vertical-align:middle}
-.map-side{border-left:1px solid var(--border);padding:12px 14px;overflow:auto;display:flex;flex-direction:column;gap:12px;min-height:0}
+.map-fallback{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;text-align:center;padding:30px;background:rgba(7,10,15,.92)}
+.map-fallback p{max-width:420px;color:var(--ink2);font-size:14px;line-height:1.5}
+.mapside-panel{display:flex;flex-direction:column;min-height:0;overflow:hidden}
+.map-side{padding:12px 14px;overflow:auto;display:flex;flex-direction:column;gap:12px;min-height:0;flex:1}
 .map-stats{display:grid;grid-template-columns:1fr 1fr;gap:10px 12px}
 .map-stats .k{font-family:var(--mono);font-size:11.5px;letter-spacing:.1em;color:var(--muted)}
 .map-stats .v{font-family:var(--display);font-size:28px;font-weight:700;line-height:1.05;font-variant-numeric:tabular-nums}
@@ -296,10 +300,6 @@ details.ev .kvt{margin:4px 0 8px}
 .tk.new{animation:tkIn 1.6s ease-out}
 @keyframes tkIn{from{background:var(--red-soft)}to{background:transparent}}
 .map-note{font-family:var(--mono);font-size:11.5px;color:var(--muted);line-height:1.5}
-@media (max-width:1099px){
-  .map-body{grid-template-columns:1fr;grid-template-rows:minmax(340px,1fr) auto}
-  .map-side{border-left:0;border-top:1px solid var(--border)}
-}
 /* ---------- wall display mode ---------- */
 body.wall .shell{height:100dvh;min-height:0;overflow:hidden}
 body.wall #tabbar,body.wall #boardNotes{display:none}
@@ -308,7 +308,6 @@ body.wall .board>[data-wall-hidden]>*{visibility:hidden}
 body.wall .board>[data-wall-hidden]::after{content:"Hidden on the wall screen: contains client names";position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font-family:var(--mono);font-size:13px;color:var(--muted);border:1px dashed var(--border-strong)}
 .board>[data-widget]{position:relative}
 body.wall #kSrcSec{visibility:hidden}
-body.wall .map-body{grid-template-columns:minmax(0,1fr) 380px}
 body.wall .map-stats .v{font-size:40px}
 body.wall .map-side h3{font-size:17px}
 body.wall .mc-row,body.wall .tk{font-size:16px}
@@ -347,10 +346,8 @@ body.editing .edit-bar{display:flex}
 .hdr-ctrl .seg button{padding:0 11px}
 .res{grid-template-columns:minmax(0,1fr) auto}
 .res-sub{white-space:nowrap}
-.map-body{grid-template-columns:minmax(0,1fr) 340px}
 .map-stats .k{white-space:nowrap;letter-spacing:.04em}
 .tk{grid-template-columns:72px minmax(0,1fr)}
-.map-body{grid-template-columns:minmax(0,1fr) 290px}
 .num{font-size:clamp(44px,4.6vw,72px)}
 .kpi{padding:16px 22px 18px}
 @media (max-width:1599px){ .truth.opt,#trendUpdated{display:none} }
@@ -445,20 +442,38 @@ body.paused .mark-core,body.paused .tk.new,body.paused .live-dot{animation-play-
           <button data-w="60" aria-pressed="true">1 min</button><button data-w="300" aria-pressed="false">5 min</button><button data-w="900" aria-pressed="false">15 min</button>
         </div>
       </div>
+      <div class="panel-head map-filters">
+        <div class="seg" id="mapTypeSeg" role="group" aria-label="Data source type">
+          <button data-type="firewall-sophos-xg" aria-pressed="true">Firewall</button><button data-type="wineventlog" aria-pressed="false">Windows</button><button data-type="linux" aria-pressed="false">Linux</button><button data-type="syslog" aria-pressed="false">Syslog</button>
+        </div>
+        <div class="seg" id="mapDirSeg" role="group" aria-label="Traffic direction">
+          <button data-dir="all" aria-pressed="true">All</button><button data-dir="in" aria-pressed="false">Inbound</button><button data-dir="out" aria-pressed="false">Outbound</button>
+        </div>
+      </div>
       <div class="map-body">
         <div class="map-wrap" id="mapWrap">
           <canvas id="mapCanvas" role="img" aria-label="World map of firewall connections: arcs from each firewall to the remote cities it is talking to."></canvas>
           <div class="tt" id="mapTip"></div>
           <div class="map-legend" aria-hidden="true"><span><i style="background:#35E7FF"></i>Outbound</span><span><i style="background:#68F5B1"></i>Inbound allowed</span><span><i style="background:#FF4D5E"></i>Denied</span><span><i style="background:#EAF7FF;height:6px;width:6px;border-radius:50%"></i>Firewall</span></div>
-        </div>
-        <div class="map-side">
-          <div class="map-stats" id="mapStats"></div>
-          <div><h3>Top countries</h3><div id="mapCountries"><div class="map-note">Loading…</div></div></div>
-          <div><h3>Latest blocked inbound</h3><div id="mapTicker"><div class="map-note">Loading…</div></div></div>
-          <div class="map-note" id="mapNote"></div>
+          <div class="map-fallback" id="mapFallback" hidden>
+            <p id="mapFallbackText"></p>
+            <button class="ghost-btn" id="mapFallbackBtn">View this source's events</button>
+          </div>
         </div>
       </div>
       <p class="sr-only" id="mapSummary" aria-live="polite"></p>
+    </section>
+
+    <section class="panel mapside-panel" id="mapSidePanel" aria-labelledby="mapSideTitle" data-widget="mapside">
+      <div class="panel-head">
+        <span class="panel-title" id="mapSideTitle">Map Stats</span>
+      </div>
+      <div class="map-side">
+        <div class="map-stats" id="mapStats"></div>
+        <div><h3>Top countries</h3><div id="mapCountries"><div class="map-note">Loading…</div></div></div>
+        <div><h3>Latest blocked inbound</h3><div id="mapTicker"><div class="map-note">Loading…</div></div></div>
+        <div class="map-note" id="mapNote"></div>
+      </div>
     </section>
 
     <section class="panel" aria-labelledby="donutTitle" data-widget="donut">
@@ -965,6 +980,9 @@ body.paused .mark-core,body.paused .tk.new,body.paused .live-dot{animation-play-
   /* ---------- live firewall map ---------- */
   var mapCv = $('#mapCanvas'), mapTip = $('#mapTip'), mapWrap = $('#mapWrap');
   var LAND = null, G = null, mapWin = 60, mapAnon = false, mapHits = [], landCache = null, seenTicks = {};
+  var mapType = 'firewall-sophos-xg', mapDir = 'all';
+  var GEO_TYPES = {'firewall-sophos-xg': true};         // only types with geolocated traffic; everything else is a fallback
+  var MAP_TYPE_LABEL = {'firewall-sophos-xg': 'firewall', 'wineventlog': 'Windows', 'linux': 'Linux', 'syslog': 'syslog'};
   var reduceMotion = !!(window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches);
   var C_OUT = '#35E7FF', C_IN = '#68F5B1', C_DENY = '#FF4D5E', C_PIN = '#FFC857';
   var HOVER_ZOOM = 3.2;
@@ -1002,6 +1020,17 @@ body.paused .mark-core,body.paused .tk.new,body.paused .live-dot{animation-play-
     return cv;
   }
   function arcColor(a){ return a.denied*2 >= a.count ? C_DENY : (a.dir==='in' ? C_IN : C_OUT); }
+  function dirArcs(){ return !G ? [] : (mapDir==='all' ? G.arcs : G.arcs.filter(function(a){ return a.dir===mapDir; })); }
+  function dirCountries(){
+    if(!G) return [];
+    if(mapDir==='all') return G.countries;
+    var by = {};
+    dirArcs().forEach(function(a){
+      var c = by[a.cc] || (by[a.cc] = {cc:a.cc, country:a.country, count:0, denied:0, 'in':0, out:0});
+      c.count += a.count; c.denied += a.denied; c[a.dir] += a.count;
+    });
+    return Object.keys(by).map(function(k){ return by[k]; }).sort(function(a,b){ return b.count-a.count; }).slice(0,12);
+  }
   function bez(p0, p1, c, t){
     var u = 1-t; return [u*u*p0[0]+2*u*t*c[0]+t*t*p1[0], u*u*p0[1]+2*u*t*c[1]+t*t*p1[1]];
   }
@@ -1025,12 +1054,12 @@ body.paused .mark-core,body.paused .tk.new,body.paused .live-dot{animation-play-
     ctx.save(); ctx.translate(w/2, h/2); ctx.scale(camZ, camZ); ctx.translate(-camX, -camY);
     ctx.drawImage(landLayer(w,h,d), 0, 0, w, h);
     if(!G || !G.sites){ ctx.restore(); return; }
-    var byId = {}, maxC = 1, t = (now||0)/1000;
+    var byId = {}, maxC = 1, t = (now||0)/1000, arcs = dirArcs();
     G.sites.forEach(function(s){ byId[s.id] = s; s._p = P(s.lon, s.lat); });
-    G.arcs.forEach(function(a){ if(a.count>maxC) maxC = a.count; });
+    arcs.forEach(function(a){ if(a.count>maxC) maxC = a.count; });
     if(!hoverPin) mapHits = [];                          // zoomed/panned: screen-space hit-testing below would be wrong
     var ends = {};
-    G.arcs.forEach(function(a, i){
+    arcs.forEach(function(a, i){
       var s = byId[a.site]; if(!s) return;
       var p0 = s._p, p1 = P(a.lon, a.lat), col = arcColor(a), wgt = Math.log(1+a.count)/Math.log(1+maxC);
       var key = a.lat+','+a.lon, e = ends[key] || (ends[key] = {p:p1, count:0, denied:0, city:a.city, country:a.country, cc:a.cc, sites:{}});
@@ -1091,8 +1120,9 @@ body.paused .mark-core,body.paused .tk.new,body.paused .live-dot{animation-play-
       '<div><div class="k">DENIED</div><div class="v" style="color:'+(dr>=30?'#FF8A95':'#EAF7FF')+'">'+dr.toFixed(1)+'<span class="unit">%</span></div></div>'+
       '<div><div class="k">FIREWALLS ACTIVE</div><div class="v">'+act+'<span class="unit">/ '+g.sites.length+'</span></div></div>'+
       '<div><div class="k">DATA AGE</div><div class="v">'+(g.age_s==null?'–':ago(g.age_s))+'</div></div>';
-    var maxC = g.countries.length ? g.countries[0].count : 1;
-    $('#mapCountries').innerHTML = g.countries.length ? g.countries.slice(0,8).map(function(c){
+    var countries = dirCountries();
+    var maxC = countries.length ? countries[0].count : 1;
+    $('#mapCountries').innerHTML = countries.length ? countries.slice(0,8).map(function(c){
       return '<div class="mc-row" title="'+esc(c.country)+': '+nf0.format(c.count)+' connections, '+nf0.format(c.denied)+' denied (in '+c['in']+' / out '+c.out+')">'+
         '<span>'+flag(c.cc)+'</span><span class="n">'+esc(c.country||c.cc)+'</span><span class="c">'+compact(c.count)+'</span>'+
         '<span class="dbar" title="denied share"><i style="width:'+(c.count? c.denied/c.count*100 : 0)+'%"></i></span></div>';
@@ -1112,9 +1142,21 @@ body.paused .mark-core,body.paused .tk.new,body.paused .live-dot{animation-play-
       (g.arcs_total > g.arcs.length ? 'Showing the busiest '+g.arcs.length+' of '+g.arcs_total+' routes. ' : '') +
       'Locations from UTMStack GeoIP; private addresses are not mapped.';
     $('#mapMeta').textContent = 'Last '+winLbl+' · updated '+hhmmss(new Date(g.generated));
-    $('#mapSummary').textContent = nf0.format(g.per_min)+' firewall connections per minute, '+dr.toFixed(1)+'% denied. Top country: '+(g.countries[0] ? g.countries[0].country : 'none')+'.';
+    $('#mapSummary').textContent = nf0.format(g.per_min)+' firewall connections per minute, '+dr.toFixed(1)+'% denied. Top country: '+(countries[0] ? countries[0].country : 'none')+'.';
+  }
+  function showMapFallback(show){
+    $('#mapFallback').hidden = !show;
+    if(show){
+      var label = MAP_TYPE_LABEL[mapType] || mapType;
+      $('#mapFallbackText').textContent = 'No geolocated traffic for '+label+' — only firewall and some cloud logs carry origin/destination locations.';
+      $('#mapMeta').textContent = label+': no map data';
+      $('#mapStats').innerHTML = ''; $('#mapCountries').innerHTML = ''; $('#mapTicker').innerHTML = '';
+      $('#mapNote').textContent = 'See that source’s own events and rules instead.';
+    }
   }
   function pollGeo(){
+    if(!GEO_TYPES[mapType]){ showMapFallback(true); return; }
+    showMapFallback(false);
     fetch('/api/geo?window='+mapWin+(mapAnon?'&anon=1':''), {cache:'no-store'}).then(function(r){ return r.json(); }).then(function(g){
       if(g.error){ $('#mapMeta').textContent = 'Map unavailable: '+g.error.slice(0,80); return; }
       if(!!g.anonymized !== mapAnon || g.window_s !== mapWin) return;   // stale answer after a toggle
@@ -1126,6 +1168,14 @@ body.paused .mark-core,body.paused .tk.new,body.paused .live-dot{animation-play-
   $$('#mapWin button').forEach(function(b){ b.addEventListener('click', function(){
     mapWin = +b.dataset.w; $$('#mapWin button').forEach(function(x){ x.setAttribute('aria-pressed', String(x===b)); }); pollGeo();
   }); });
+  $$('#mapTypeSeg button').forEach(function(b){ b.addEventListener('click', function(){
+    mapType = b.dataset.type; $$('#mapTypeSeg button').forEach(function(x){ x.setAttribute('aria-pressed', String(x===b)); }); pollGeo();
+  }); });
+  $$('#mapDirSeg button').forEach(function(b){ b.addEventListener('click', function(){
+    mapDir = b.dataset.dir; $$('#mapDirSeg button').forEach(function(x){ x.setAttribute('aria-pressed', String(x===b)); });
+    if(G){ renderMapSide(); drawMap(frameT()); }
+  }); });
+  $('#mapFallbackBtn').addEventListener('click', function(){ openDig({name:'sources', tab:'source', type:mapType}, true); });
   mapCv.addEventListener('mousemove', function(ev){
     if(hoverPin) return;                               // a hovered row owns the tooltip and the camera right now
     var r = mapCv.getBoundingClientRect(), x = ev.clientX-r.left, y = ev.clientY-r.top, best = null, bd = 1e9;

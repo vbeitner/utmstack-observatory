@@ -1,5 +1,29 @@
 # Release notes
 
+## 1.5.0 — 2026-10-18
+
+**For users**
+- The Live Firewall Map now has a **data source type** filter (Firewall / Windows / Linux / Syslog) and an
+  **inbound/outbound** filter. Only firewall and some cloud logs actually carry origin/destination locations —
+  selecting Windows, Linux, or Syslog shows a note explaining that instead of an empty map, with a button
+  straight to that source's own event/rule breakdown.
+- The map's stats panel (connections/min, denied %, top countries, latest blocked inbound) is now its own
+  movable, resizable widget — drag it anywhere, or remove it, independently of the map itself.
+
+**Technical**
+- No backend query changes: the type filter is purely a frontend gate (`GEO_TYPES` allowlist) since
+  `/api/geo` only ever covered the firewall Sophos XG index; live-checked OpenSearch confirmed `linux`/
+  `syslog`/`wineventlog` have zero `origin.geolocation`-tagged docs (vs. 537k for firewall, 74k for o365).
+  The fallback reuses the existing `alerts-rule`-style dig entry point (`openDig({name:'sources', tab:'source',
+  type})`), not a new view.
+- Inbound/outbound is a pure client-side filter over the already-fetched `arcs` array (each carries `dir`) —
+  no extra API round trip. Top-countries recomputes from filtered arcs when a direction is selected; falls
+  back to the server-aggregated `countries` list (more precise) when showing all traffic.
+- New `mapside` widget type, registered in both `app/layout.js`'s `WIDGETS` and `app/layout_store.py`'s
+  `WIDGET_TYPES` (plus the hardcoded catalogue-sync assertion in `tests/layout.test.js`) — the map panel's
+  sidebar markup moved from `.map-side` nested inside `#mapPanel` to its own top-level `data-widget="mapside"`
+  section, which is all the existing drag/resize/add/remove system needed to pick it up.
+
 ## 1.4.0 — 2026-10-18
 
 **For users**

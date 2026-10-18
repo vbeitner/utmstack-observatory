@@ -121,6 +121,29 @@ class GeoMap(unittest.TestCase):
         self.assertEqual((per["Dependable_HQ"]["total"], per["Dependable_HQ"]["denied"]), (600, 100))
         self.assertEqual(per["Keltic_North"]["total"], 0)                       # quiet in this window
 
+    def test_type_scopes_the_index_and_filter(self):
+        g = self.s.build_geo(60, "o365")
+        main = next(b for p, b in self.calls if "per_fw" in (b or {}).get("aggs", {}))
+        path = next(p for p, b in self.calls if "per_fw" in (b or {}).get("aggs", {}))
+        self.assertEqual(path, "/v11-log-o365*/_search")
+        self.assertIn({"term": {"dataType.keyword": "o365"}}, main["query"]["bool"]["filter"])
+        self.assertEqual(g["type"], "o365")
+        self.assertNotIn("Keltic_North", [x["name"] for x in g["sites"]])     # idle firewalls only on firewall/all views
+        ticker = next(b for p, b in self.calls if "sort" in (b or {}))
+        self.assertIn({"terms": {"actionResult.keyword": ["denied", "failed"]}}, ticker["query"]["bool"]["filter"])
+
+    def test_all_covers_every_geo_type_and_unknown_type_means_all(self):
+        g = self.s.api_geo(60, dtype="nonsense")
+        self.assertEqual(g["type"], "all")
+        main = next(b for p, b in self.calls if "per_fw" in (b or {}).get("aggs", {}))
+        self.assertIn({"terms": {"dataType.keyword": list(self.s.GEO_TYPES)}}, main["query"]["bool"]["filter"])
+
+    def test_cache_is_per_type(self):
+        self.s.api_geo(60, dtype="all")
+        n = len(self.calls)
+        self.s.api_geo(60, dtype="firewall-sophos-xg")
+        self.assertGreater(len(self.calls), n)                                  # different type: its own query
+
     def test_window_is_clamped_and_cached(self):
         self.s.api_geo(60)
         n = len(self.calls)

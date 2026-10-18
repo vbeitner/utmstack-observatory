@@ -1,5 +1,25 @@
 # Release notes
 
+## 1.6.0 — 2026-10-18
+
+**For users**
+- The map's source filter now starts on **All** and adds **M365** and **Google** next to Firewall. "All" shows
+  traffic from every source that carries location data, both directions; pick one source to see just that one,
+  and use All / Inbound / Outbound to choose the direction. M365 shows sign-in locations (inbound), with failed
+  sign-ins in the "Latest blocked / failed inbound" list.
+- Fixed: switching sources sometimes needed two clicks — a slow answer for the previous choice could overwrite
+  the new one. The map now clears immediately on a switch and ignores late answers.
+- Google shows an empty map for now: no Google Workspace / GCP logs are reaching UTMStack yet.
+
+**Technical**
+- `/api/geo` takes `type=all|firewall-sophos-xg|o365|google` (anything else means `all`); `build_geo()` scopes
+  the index pattern and a `dataType.keyword` filter per type, cache keyed by (window, type). Idle firewall pins
+  only appear on the All / Firewall views. Ticker counts `failed` as blocked for non-firewall sources.
+- Live coverage check (24 h): firewall has origin+target geo, o365 origin only, linux/syslog/wineventlog none.
+- OpenSearch was yellow from one unplaceable replica of the internal `top_queries-*` index (single-node
+  cluster). Set its replicas to 0 and added index template `observatory-single-node-top-queries` so new daily
+  indices don't ask for one — cluster is green.
+
 ## 1.5.0 — 2026-10-18
 
 **For users**

@@ -12,7 +12,7 @@ import urllib.error, urllib.request
 from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-VERSION = "1.5.0"
+VERSION = "1.6.0"
 HERE = os.path.dirname(os.path.abspath(__file__))
 if HERE not in sys.path:                          # the container runs "python3 -I", which leaves this folder off sys.path
     sys.path.insert(0, HERE)
@@ -1115,6 +1115,8 @@ def opensearch_put_cmd(path, body):
 # Arcs between each firewall and the remote cities it talks to, from Sophos XG logs. UTMStack already
 # geolocates public IPs (origin/target.geolocation), so no GeoIP database or outside lookup is needed.
 FW_SEARCH = "/v11-log-firewall-sophos-xg-*/_search"
+# Data types whose logs carry origin/target geolocation; "all" means every one of them together.
+GEO_TYPES = ("firewall-sophos-xg", "o365", "google")
 GEO_WINDOWS_S = (60, 300, 900)
 GEO_TTL_S = 10                                   # one shared query per 10 s, however many viewers
 SITE_TTL_S = 1800                                # re-check firewall locations every 30 min
@@ -1228,10 +1230,22 @@ def _outcomes(buckets):
     return o.get("denied", 0), o.get("failed", 0)
 
 
-def build_geo(window):
-    span = rng("now-%ds" % window)
+def geo_scope(dtype):
+    """Index pattern and dataType filter for one map type, or for every geo-capable type ("all")."""
+    if dtype == "firewall-sophos-xg":
+        return FW_SEARCH, {"term": {"dataType.keyword": dtype}}
+    if dtype in GEO_TYPES:
+        return "/v11-log-%s*/_search" % dtype, {"term": {"dataType.keyword": dtype}}
+    return "/v11-log-*/_search", {"terms": {"dataType.keyword": list(GEO_TYPES)}}
+
+
+def build_geo(window, dtype="all"):
+    search, type_flt = geo_scope(dtype)
+    span = {"bool": {"filter": [rng("now-%ds" % window), type_flt]}}
     has = lambda f: {"exists": {"field": f}}
-    r = os_call(FW_SEARCH, {"size": 0, "track_total_hits": True, "query": span, "aggs": {
+    # firewalls only "deny"; for sign-in logs (M365, Google) a failed login is the blocked event
+    blocked = ["denied"] if dtype == "firewall-sophos-xg" else ["denied", "failed"]
+    r = os_call(search, {"size": 0, "track_total_hits": True, "query": span, "aggs": {
         "newest": {"max": {"field": "@timestamp"}},
         "outcome": {"terms": {"field": "actionResult.keyword", "size": 5}},
         "per_fw": {"terms": {"field": "dataSource.keyword", "size": 100},
@@ -1242,16 +1256,16 @@ def build_geo(window):
                                     "must_not": [has("origin.geolocation.latitude")]}},
                 "aggs": {"fw": _remote_aggs("target")}},
     }})
-    t = os_call(FW_SEARCH, {"size": 14, "sort": [{"@timestamp": "desc"}], "query": {"bool": {"filter": [
-        span, {"term": {"actionResult.keyword": "denied"}}, has("origin.geolocation.latitude")]}},
+    t = os_call(search, {"size": 14, "sort": [{"@timestamp": "desc"}], "query": {"bool": {"filter": [
+        span, {"terms": {"actionResult.keyword": blocked}}, has("origin.geolocation.latitude")]}},
         "_source": ["@timestamp", "origin.ip", "origin.geolocation.city", "origin.geolocation.country",
                     "origin.geolocation.countryCode", "origin.geolocation.latitude", "origin.geolocation.longitude",
-                    "target.port", "protocol", "dataSource"]})
+                    "target.port", "protocol", "dataSource", "dataType"]})
     a = r["aggregations"]
     total = r["hits"]["total"]["value"]
     denied, failed = _outcomes(a["outcome"]["buckets"])
 
-    sites = [dict(x) for x in fw_sites()]
+    sites = [dict(x) for x in fw_sites()] if dtype in ("all", "firewall-sophos-xg") else []
     by_id = {x["id"]: x for x in sites}
     for b in a["per_fw"]["buckets"]:
         ip = _q(b["key"])
@@ -1290,11 +1304,11 @@ def build_geo(window):
         lat, lon = g.get("latitude"), g.get("longitude")
         ticker.append({"t": s_.get("@timestamp"), "ip": o.get("ip"), "city": g.get("city"), "country": g.get("country"),
                        "cc": g.get("countryCode"), "port": (s_.get("target") or {}).get("port"),
-                       "proto": s_.get("protocol"), "site": _q(s_.get("dataSource")),
+                       "proto": s_.get("protocol"), "site": _q(s_.get("dataSource")), "type": s_.get("dataType"),
                        "lat": round(lat, 3) if lat is not None else None, "lon": round(lon, 3) if lon is not None else None})
 
     newest = a["newest"].get("value")
-    return {"window_s": window, "generated": datetime.now(timezone.utc).isoformat(),
+    return {"window_s": window, "type": dtype, "generated": datetime.now(timezone.utc).isoformat(),
             "age_s": round(max(0, time.time() - newest / 1000), 1) if newest else None,
             "total": total, "denied": denied, "failed": failed, "per_min": round(total * 60 / window),
             "home": current_home(), "sites": sites, "arcs": arcs[:MAX_ARCS], "arcs_total": len(arcs),
@@ -1320,13 +1334,14 @@ def anonymize(geo):
     return out
 
 
-def api_geo(window=60, anon=False):
+def api_geo(window=60, anon=False, dtype="all"):
     window = window if window in GEO_WINDOWS_S else 60
+    dtype = dtype if dtype in GEO_TYPES else "all"
     with _geo_lock:
-        hit = _geo_cache.get(window)
+        hit = _geo_cache.get((window, dtype))
         if not hit or time.time() - hit[0] >= GEO_TTL_S:
-            hit = (time.time(), build_geo(window))
-            _geo_cache[window] = hit
+            hit = (time.time(), build_geo(window, dtype))
+            _geo_cache[(window, dtype)] = hit
     data = hit[1]                                # shared cache: never modify it in place
     if anon:
         return anonymize(data)
@@ -1571,7 +1586,7 @@ class Handler(BaseHTTPRequestHandler):
             "/api/settings": lambda: api_settings(),
             "/api/reports": lambda: {"reports": reports.list_reports(DATA_DIR), "report_hour": current_report_hour()},
             "/api/geo": lambda: api_geo(int(p["window"]) if p.get("window", "").isdigit() else 60,
-                                        p.get("anon") == "1"),
+                                        p.get("anon") == "1", p.get("type", "all")),
         }
         if u.path == "/api/data":
             try:

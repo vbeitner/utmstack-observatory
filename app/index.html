@@ -444,7 +444,7 @@ body.paused .mark-core,body.paused .tk.new,body.paused .live-dot{animation-play-
       </div>
       <div class="panel-head map-filters">
         <div class="seg" id="mapTypeSeg" role="group" aria-label="Data source type">
-          <button data-type="firewall-sophos-xg" aria-pressed="true">Firewall</button><button data-type="wineventlog" aria-pressed="false">Windows</button><button data-type="linux" aria-pressed="false">Linux</button><button data-type="syslog" aria-pressed="false">Syslog</button>
+          <button data-type="all" aria-pressed="true">All</button><button data-type="firewall-sophos-xg" aria-pressed="false">Firewall</button><button data-type="o365" aria-pressed="false">M365</button><button data-type="google" aria-pressed="false">Google</button><button data-type="wineventlog" aria-pressed="false">Windows</button><button data-type="linux" aria-pressed="false">Linux</button><button data-type="syslog" aria-pressed="false">Syslog</button>
         </div>
         <div class="seg" id="mapDirSeg" role="group" aria-label="Traffic direction">
           <button data-dir="all" aria-pressed="true">All</button><button data-dir="in" aria-pressed="false">Inbound</button><button data-dir="out" aria-pressed="false">Outbound</button>
@@ -471,7 +471,7 @@ body.paused .mark-core,body.paused .tk.new,body.paused .live-dot{animation-play-
       <div class="map-side">
         <div class="map-stats" id="mapStats"></div>
         <div><h3>Top countries</h3><div id="mapCountries"><div class="map-note">Loading…</div></div></div>
-        <div><h3>Latest blocked inbound</h3><div id="mapTicker"><div class="map-note">Loading…</div></div></div>
+        <div><h3 id="mapTickerTitle">Latest blocked inbound</h3><div id="mapTicker"><div class="map-note">Loading…</div></div></div>
         <div class="map-note" id="mapNote"></div>
       </div>
     </section>
@@ -980,9 +980,11 @@ body.paused .mark-core,body.paused .tk.new,body.paused .live-dot{animation-play-
   /* ---------- live firewall map ---------- */
   var mapCv = $('#mapCanvas'), mapTip = $('#mapTip'), mapWrap = $('#mapWrap');
   var LAND = null, G = null, mapWin = 60, mapAnon = false, mapHits = [], landCache = null, seenTicks = {};
-  var mapType = 'firewall-sophos-xg', mapDir = 'all';
-  var GEO_TYPES = {'firewall-sophos-xg': true};         // only types with geolocated traffic; everything else is a fallback
-  var MAP_TYPE_LABEL = {'firewall-sophos-xg': 'firewall', 'wineventlog': 'Windows', 'linux': 'Linux', 'syslog': 'syslog'};
+  var mapType = 'all', mapDir = 'all';
+  // types whose logs carry origin/target geolocation (keep in step with GEO_TYPES in server.py); the rest get a note
+  var GEO_TYPES = {'all': true, 'firewall-sophos-xg': true, 'o365': true, 'google': true};
+  var MAP_TYPE_LABEL = {'all': 'all sources', 'firewall-sophos-xg': 'firewall', 'o365': 'Microsoft 365', 'google': 'Google',
+                        'wineventlog': 'Windows', 'linux': 'Linux', 'syslog': 'syslog'};
   var reduceMotion = !!(window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches);
   var C_OUT = '#35E7FF', C_IN = '#68F5B1', C_DENY = '#FF4D5E', C_PIN = '#FFC857';
   var HOVER_ZOOM = 3.2;
@@ -1118,7 +1120,7 @@ body.paused .mark-core,body.paused .tk.new,body.paused .live-dot{animation-play-
     $('#mapStats').innerHTML =
       '<div><div class="k">CONNS / MIN</div><div class="v">'+nf0.format(g.per_min)+'</div></div>'+
       '<div><div class="k">DENIED</div><div class="v" style="color:'+(dr>=30?'#FF8A95':'#EAF7FF')+'">'+dr.toFixed(1)+'<span class="unit">%</span></div></div>'+
-      '<div><div class="k">FIREWALLS ACTIVE</div><div class="v">'+act+'<span class="unit">/ '+g.sites.length+'</span></div></div>'+
+      '<div><div class="k">'+(mapType==='firewall-sophos-xg' ? 'FIREWALLS' : 'SOURCES')+' ACTIVE</div><div class="v">'+act+'<span class="unit">/ '+g.sites.length+'</span></div></div>'+
       '<div><div class="k">DATA AGE</div><div class="v">'+(g.age_s==null?'–':ago(g.age_s))+'</div></div>';
     var countries = dirCountries();
     var maxC = countries.length ? countries[0].count : 1;
@@ -1128,6 +1130,7 @@ body.paused .mark-core,body.paused .tk.new,body.paused .live-dot{animation-play-
         '<span class="dbar" title="denied share"><i style="width:'+(c.count? c.denied/c.count*100 : 0)+'%"></i></span></div>';
     }).join('') : '<div class="map-note">No geolocated traffic in the last '+winLbl+'.</div>';
     var fresh = {};
+    $('#mapTickerTitle').textContent = mapType==='firewall-sophos-xg' ? 'Latest blocked inbound' : 'Latest blocked / failed inbound';
     $('#mapTicker').innerHTML = g.ticker.length ? g.ticker.slice(0,10).map(function(x){
       var key = x.t+x.ip, isNew = !seenTicks[key]; fresh[key] = 1;
       var where = [x.city, x.country].filter(Boolean).join(', ') || x.cc || '';
@@ -1157,9 +1160,9 @@ body.paused .mark-core,body.paused .tk.new,body.paused .live-dot{animation-play-
   function pollGeo(){
     if(!GEO_TYPES[mapType]){ showMapFallback(true); return; }
     showMapFallback(false);
-    fetch('/api/geo?window='+mapWin+(mapAnon?'&anon=1':''), {cache:'no-store'}).then(function(r){ return r.json(); }).then(function(g){
+    fetch('/api/geo?window='+mapWin+'&type='+encodeURIComponent(mapType)+(mapAnon?'&anon=1':''), {cache:'no-store'}).then(function(r){ return r.json(); }).then(function(g){
       if(g.error){ $('#mapMeta').textContent = 'Map unavailable: '+g.error.slice(0,80); return; }
-      if(!!g.anonymized !== mapAnon || g.window_s !== mapWin) return;   // stale answer after a toggle
+      if(!!g.anonymized !== mapAnon || g.window_s !== mapWin || g.type !== mapType) return;   // stale answer after a toggle
       if(!liveOn){ pendingG = g; return; }
       G = g; renderMapSide(); if(reduceMotion) drawMap(0);
     }).catch(function(e){ $('#mapMeta').textContent = 'Map unreachable ('+e.message+')'; });
@@ -1169,7 +1172,10 @@ body.paused .mark-core,body.paused .tk.new,body.paused .live-dot{animation-play-
     mapWin = +b.dataset.w; $$('#mapWin button').forEach(function(x){ x.setAttribute('aria-pressed', String(x===b)); }); pollGeo();
   }); });
   $$('#mapTypeSeg button').forEach(function(b){ b.addEventListener('click', function(){
-    mapType = b.dataset.type; $$('#mapTypeSeg button').forEach(function(x){ x.setAttribute('aria-pressed', String(x===b)); }); pollGeo();
+    mapType = b.dataset.type; $$('#mapTypeSeg button').forEach(function(x){ x.setAttribute('aria-pressed', String(x===b)); });
+    G = null; seenTicks = {}; drawMap(frameT());       // drop the previous type's arcs right away, don't wait for the answer
+    $('#mapMeta').textContent = 'Loading '+(MAP_TYPE_LABEL[mapType]||mapType)+'…';
+    pollGeo();
   }); });
   $$('#mapDirSeg button').forEach(function(b){ b.addEventListener('click', function(){
     mapDir = b.dataset.dir; $$('#mapDirSeg button').forEach(function(x){ x.setAttribute('aria-pressed', String(x===b)); });

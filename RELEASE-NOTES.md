@@ -1,5 +1,16 @@
 # Release notes
 
+## 1.6.2 — 2026-10-18
+
+**For users**
+- Fixed: the live map was dimmed with a "View this source's events" button in the middle even when showing real
+  traffic. That note now appears only for sources without location data (Windows, Linux, Syslog), as a slim bar
+  across the top of the map instead of covering it.
+
+**Technical**
+- `.map-fallback` set `display:flex`, which overrode the `hidden` attribute; added `.map-fallback[hidden]
+  {display:none}` (same pattern as `.top5-body[hidden]`) and turned the overlay into a top-anchored bar.
+
 ## 1.6.1 — 2026-10-18
 
 **For users**

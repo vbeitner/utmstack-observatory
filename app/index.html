@@ -278,8 +278,9 @@ details.ev .kvt{margin:4px 0 8px}
 .map-wrap canvas{position:absolute;inset:0;width:100%;height:100%;display:block}
 .map-legend{position:absolute;left:12px;bottom:10px;display:flex;flex-wrap:wrap;gap:14px;font-family:var(--mono);font-size:11.5px;color:var(--ink2);background:rgba(7,10,15,.78);border:1px solid var(--border);padding:5px 9px}
 .map-legend i{display:inline-block;width:14px;height:2px;margin-right:6px;vertical-align:middle}
-.map-fallback{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;text-align:center;padding:30px;background:rgba(7,10,15,.92)}
-.map-fallback p{max-width:420px;color:var(--ink2);font-size:14px;line-height:1.5}
+.map-fallback{position:absolute;top:10px;left:12px;right:12px;z-index:3;display:flex;align-items:center;gap:12px;flex-wrap:wrap;padding:8px 12px;background:rgba(7,10,15,.85);border:1px solid var(--border)}
+.map-fallback[hidden]{display:none}           /* display:flex above would otherwise beat the hidden attribute */
+.map-fallback p{margin:0;flex:1;min-width:200px;color:var(--ink2);font-size:13.5px;line-height:1.45}
 .mapside-panel{display:flex;flex-direction:column;min-height:0;overflow:hidden}
 .map-side{padding:12px 14px;overflow:auto;display:flex;flex-direction:column;gap:12px;min-height:0;flex:1}
 .map-stats{display:grid;grid-template-columns:1fr 1fr;gap:10px 12px}

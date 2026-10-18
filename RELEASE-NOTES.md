@@ -1,5 +1,20 @@
 # Release notes
 
+## 1.4.0 — 2026-10-18
+
+**For users**
+- The **Alert Rules** list on the main dashboard is now clickable: click any rule bar to see every
+  alert that fired it in the last 24 hours (same filtered alert list already reachable from a
+  source's own rule breakdown), then click an alert for the full detail with source events,
+  WHOIS, and reputation lookups.
+
+**Technical**
+- Wired `renderRules()`'s bar rows to the existing `alerts-rule` dig view (`openDig({name:'alerts',
+  rule, source:''})`) instead of adding new UI — the backend `/api/alerts?rule=` filter and the
+  `VIEWS.alerts`/`VIEWS.alert` views already existed, used elsewhere (per-source rule rows, "Same
+  rule" button on alert detail). Added `.bar-row.clk` hover/focus styling and a `#top5Body`
+  click+keydown entry point matching the existing `#alertBody`/`#kpiBand` pattern.
+
 ## 1.3.1 — 2026-10-17
 
 **For users**

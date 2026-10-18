@@ -284,6 +284,9 @@ details.ev .kvt{margin:4px 0 8px}
 #mapBase{position:absolute;inset:0}
 .map-wrap.has-base #mapCanvas{pointer-events:none}
 .map-wrap .maplibregl-ctrl-attrib{font-size:10.5px}
+.netb{display:inline-block;margin-left:5px;padding:0 5px;border:1px solid currentColor;border-radius:3px;font-family:var(--mono);font-size:10.5px;line-height:15px;vertical-align:1px}
+.netb-vpn{color:#FFC857}.netb-tor{color:#C792EA}.netb-hosting{color:#8FB8D0}
+.tk-type{color:var(--muted);font-family:var(--mono);font-size:11px}
 .map-zoom{position:absolute;right:12px;bottom:10px;z-index:3;display:flex;flex-direction:column;gap:4px}
 .map-zoom button{width:34px;height:34px;border:1px solid var(--border-strong);background:rgba(7,10,15,.85);color:var(--ink);font-family:var(--mono);font-size:18px;line-height:1;cursor:pointer}
 .map-zoom button:hover,.map-zoom button:focus-visible{border-color:var(--cyan);color:var(--cyan)}
@@ -656,8 +659,8 @@ body.paused .mark-core,body.paused .tk.new,body.paused .live-dot{animation-play-
   }
   function clamp(v,a,b){return Math.max(a,Math.min(b,v))}
   function esc(s){return String(s==null?'':s).replace(/[&<>"']/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]})}
-  function fit(cv){
-    var r = cv.getBoundingClientRect(), d = Math.min(window.devicePixelRatio||1,2);
+  function fit(cv, maxD){
+    var r = cv.getBoundingClientRect(), d = Math.min(window.devicePixelRatio||1, maxD||2);
     var w = Math.max(1,r.width), h = Math.max(1,r.height);
     if(cv.width !== Math.round(w*d) || cv.height !== Math.round(h*d)){ cv.width = Math.round(w*d); cv.height = Math.round(h*d); }
     var ctx = cv.getContext('2d'); ctx.setTransform(d,0,0,d,0,0);
@@ -1007,7 +1010,9 @@ body.paused .mark-core,body.paused .tk.new,body.paused .live-dot{animation-play-
   var LAND = null, G = null, mapWin = 60, mapAnon = false, mapHits = [], landCache = null, seenTicks = {};
   var mapType = 'all', mapDir = 'all', mapOut = 'all';
   // types whose logs carry origin/target geolocation (keep in step with GEO_TYPES in server.py); the rest get a note
-  var GEO_TYPES = {'all': true, 'firewall-sophos-xg': true, 'o365': true, 'google': true};
+  var GEO_TYPES = {'all': true, 'firewall-sophos-xg': true, 'o365': true, 'google': true, 'linux': true, 'syslog': true, 'wineventlog': true};
+  var NET_LABEL = {vpn: 'VPN', tor: 'Tor', hosting: 'Hosting'};
+  function netBadge(n){ return n ? ' <span class="netb netb-'+n+'" title="'+(n==='hosting' ? 'Datacenter / hosting range (often a VPN or VPS)' : n==='tor' ? 'Tor exit node' : 'Known VPN range')+'">'+NET_LABEL[n]+'</span>' : ''; }
   var MAP_TYPE_LABEL = {'all': 'all sources', 'firewall-sophos-xg': 'firewall', 'o365': 'Microsoft 365', 'google': 'Google',
                         'wineventlog': 'Windows', 'linux': 'Linux', 'syslog': 'syslog'};
   var reduceMotion = !!(window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches);
@@ -1016,7 +1021,8 @@ body.paused .mark-core,body.paused .tk.new,body.paused .live-dot{animation-play-
   var hoverPin = null;                             // {lat, lon, label} while a row with coordinates is hovered
   var camX = 0, camY = 0, camZ = 1;                 // eased camera focus (base-projection pixels) and zoom
   var userZ = 1, userX = null, userY = null, viewW = 0, viewH = 0, snapCam = false, MAX_ZOOM = 8;   // user's own zoom/pan
-  var BASE = null, WORLD = [[-170, -56], [180, 78]], pinPrevView = null;   // MapLibre street map, once it has loaded
+  var BASE = null, WORLD = [[-170, -56], [180, 78]], pinPrevView = null;
+  var MAP_DPR = Math.min(window.devicePixelRatio || 1, 1.25);   // street map + arc layer resolution: lighter on GPUs   // MapLibre street map, once it has loaded
   fetch('/land.json', {cache:'force-cache'}).then(function(r){ return r.json(); })
     .then(function(d){ LAND = d.rings; landCache = null; drawMap(frameT()); }).catch(function(){});
 
@@ -1083,7 +1089,7 @@ body.paused .mark-core,body.paused .tk.new,body.paused .live-dot{animation-play-
 
   function drawMap(now){
     if(!mapCv.offsetParent) return;                     // panel hidden (wall mode on another view)
-    var f = fit(mapCv), ctx = f.ctx, w = f.w, h = f.h, d = Math.min(window.devicePixelRatio||1,2);
+    var f = fit(mapCv, BASE ? MAP_DPR : 2), ctx = f.ctx, w = f.w, h = f.h, d = Math.min(window.devicePixelRatio||1,2);
     ctx.clearRect(0,0,w,h);
     var P, tz, tx, ty;
     if(BASE){                                            // street basemap owns zoom/pan: project through it, no camera
@@ -1115,8 +1121,8 @@ body.paused .mark-core,body.paused .tk.new,body.paused .live-dot{animation-play-
     arcs.forEach(function(a, i){
       var s = byId[a.site]; if(!s) return;
       var p0 = s._p, p1 = P(a.lon, a.lat), col = arcColor(a), wgt = Math.log(1+a.count)/Math.log(1+maxC);
-      var key = a.lat+','+a.lon, e = ends[key] || (ends[key] = {p:p1, count:0, denied:0, city:a.city, country:a.country, cc:a.cc, sites:{}});
-      e.count += a.count; e.denied += a.denied; e.sites[s.name] = (e.sites[s.name]||0) + a.count;
+      var key = a.lat+','+a.lon, e = ends[key] || (ends[key] = {p:p1, count:0, denied:0, vpn:0, city:a.city, country:a.country, cc:a.cc, sites:{}});
+      e.count += a.count; e.denied += a.denied; e.vpn += a.vpn||0; e.sites[s.name] = (e.sites[s.name]||0) + a.count;
       var dx = p1[0]-p0[0], dy = p1[1]-p0[1];
       if(dx*dx+dy*dy < 9) return;                        // same metro area: endpoint dot only
       var c = ctrl(p0, p1);
@@ -1160,7 +1166,11 @@ body.paused .mark-core,body.paused .tk.new,body.paused .live-dot{animation-play-
       positionPinTip(mx, my);
     }
   }
-  function mapLoop(now){ if(liveOn) drawMap(now); if(!reduceMotion) requestAnimationFrame(mapLoop); }
+  var lastMapDraw = 0;
+  function mapLoop(now){                                // ~30 fps idle animation; while the street map moves, its render event draws
+    if(liveOn && !(BASE && BASE.isMoving()) && now - lastMapDraw >= 32){ lastMapDraw = now; drawMap(now); }
+    if(!reduceMotion) requestAnimationFrame(mapLoop);
+  }
   requestAnimationFrame(mapLoop);
   window.addEventListener('resize', function(){ landCache = null; drawMap(frameT()); });
 
@@ -1187,14 +1197,16 @@ body.paused .mark-core,body.paused .tk.new,body.paused .live-dot{animation-play-
       var where = [x.city, x.country].filter(Boolean).join(', ') || x.cc || '';
       var geo = x.lat!=null && x.lon!=null ? ' data-lat="'+x.lat+'" data-lon="'+x.lon+'" data-ip="'+esc(x.ip||'')+'" data-sub="'+esc(where+' → '+x.site)+'" tabindex="0" role="button" aria-label="Look up '+esc(x.ip||'')+'"' : '';
       return '<div class="tk'+(isNew && Object.keys(seenTicks).length ? ' new' : '')+'"'+geo+'><span class="t">'+hhmmss(new Date(x.t))+'</span>'+
-        '<span class="w"><span class="ip">'+esc(x.ip)+'</span> '+flag(x.cc)+' '+esc(where)+' → '+esc(x.site)+(x.port?' :'+esc(x.port):'')+'</span></div>';
+        '<span class="w"><span class="ip">'+esc(x.ip)+'</span>'+netBadge(x.net)+' '+flag(x.cc)+' '+esc(where)+' → '+esc(x.site)+(x.port?' :'+esc(x.port):'')+
+        (mapType==='all' && x.type ? ' <span class="tk-type">'+esc(MAP_TYPE_LABEL[x.type]||x.type)+'</span>' : '')+'</span></div>';
     }).join('') : '<div class="map-note">No blocked inbound connections in the last '+winLbl+'.</div>';
     seenTicks = fresh;
     var home = g.sites.filter(function(s){ return s.loc_source==='home'; });
     $('#mapNote').textContent = (g.anonymized ? 'Wall mode: firewall names hidden. ' : '') +
-      (home.length && !g.anonymized ? home.length+' firewall'+(home.length>1?'s have':' has')+' no known location and '+(home.length>1?'are':'is')+' shown at '+(g.home.city||'home')+' ('+home.map(function(s){return s.name;}).join(', ')+'). Set it with install.sh --sites. ' : '') +
+      (home.length && !g.anonymized ? home.length+' source'+(home.length>1?'s have':' has')+' no known location and '+(home.length>1?'are':'is')+' shown at '+(g.home.city||'home')+' ('+home.slice(0,6).map(function(s){return s.name;}).join(', ')+(home.length>6?', …':'')+'). Set it with install.sh --sites. ' : '') +
       (g.arcs_total > g.arcs.length ? 'Showing the busiest '+g.arcs.length+' of '+g.arcs_total+' routes. ' : '') +
-      'Locations from UTMStack GeoIP; private addresses are not mapped.';
+      'Locations from UTMStack GeoIP and IP Geolocation by DB-IP (db-ip.com, CC BY 4.0); VPN/hosting ranges from X4BNet, Tor exits from the Tor Project. Private addresses are not mapped.' +
+      (g.geoip && !g.geoip.db ? ' The location database is still downloading — attackers from Linux, Syslog and Windows appear once it is ready.' : '');
     $('#mapMeta').textContent = 'Last '+winLbl+' · updated '+hhmmss(new Date(g.generated));
     $('#mapSummary').textContent = nf0.format(g.per_min)+' firewall connections per minute, '+dr.toFixed(1)+'% denied. Top country: '+(countries[0] ? countries[0].country : 'none')+'.';
   }
@@ -1248,7 +1260,8 @@ body.paused .mark-core,body.paused .tk.new,body.paused .live-dot{animation-play-
     } else {
       var e = best.e, top = Object.keys(e.sites).sort(function(a,b){ return e.sites[b]-e.sites[a]; }).slice(0,3);
       html = '<b style="color:#EAF7FF">'+flag(e.cc)+' '+esc([e.city, e.country].filter(Boolean).join(', '))+'</b><br>'+nf0.format(e.count)+' connections · '+
-        '<span style="color:'+(e.denied?'#FF8A95':'inherit')+'">'+nf0.format(e.denied)+' denied</span><br>via '+top.map(esc).join(', ');
+        '<span style="color:'+(e.denied?'#FF8A95':'inherit')+'">'+nf0.format(e.denied)+' blocked</span>'+
+        (e.vpn ? '<br><span style="color:#FFC857">'+nf0.format(e.vpn)+' from VPN / hosting / Tor addresses</span>' : '')+'<br>via '+top.map(esc).join(', ');
     }
     mapTip.innerHTML = html; mapTip.classList.add('on');
     var tw = mapTip.offsetWidth, th = mapTip.offsetHeight;
@@ -1328,16 +1341,19 @@ body.paused .mark-core,body.paused .tk.new,body.paused .live-dot{animation-play-
     var ready = false, m;
     try {
       m = new maplibregl.Map({container: 'mapBase', style: 'https://tiles.openfreemap.org/styles/dark', bounds: WORLD,
+        pixelRatio: MAP_DPR, fadeDuration: 0,
         fitBoundsOptions: {padding: 10}, renderWorldCopies: false, attributionControl: false, maxZoom: 18,
         dragRotate: false, pitchWithRotate: false, touchPitch: false,
         cooperativeGestures: !!(window.matchMedia && matchMedia('(pointer: coarse)').matches)});   // phones: 2 fingers move the map
     } catch(e){ return; }                              // no WebGL
     m.touchZoomRotate.disableRotation();
     m.addControl(new maplibregl.AttributionControl({compact: true}), 'top-right');
+    var attrib = mapWrap.querySelector('.maplibregl-ctrl-attrib');
+    if(attrib) attrib.classList.remove('maplibregl-compact-show');   // start folded to the (i) button
     m.on('load', function(){
       ready = true; BASE = m; mapWrap.classList.add('has-base'); mapTip.classList.remove('on'); drawMap(frameT());
     });
-    m.on('move', function(){ if(BASE && (!liveOn || reduceMotion)) drawMap(frameT()); });
+    m.on('render', function(){ if(BASE && (m.isMoving() || !liveOn || reduceMotion)) drawMap(frameT()); });   // same frame as the map
     var tip = function(e){ if(BASE && !hoverPin) tipAt(e.point.x, e.point.y, mapCv.getBoundingClientRect()); };
     m.on('mousemove', tip); m.on('click', tip);
     m.on('mouseout', function(){ if(!hoverPin) mapTip.classList.remove('on'); });

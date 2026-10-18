@@ -1,5 +1,31 @@
 # Release notes
 
+## 1.10.0 — 2026-10-18
+
+**For users**
+- Attackers seen by **Syslog** (e.g. "Invalid user … from 2.57.122.238"), **Linux** and **Windows** now appear on the
+  map, located from the attacker's IP address. **M365** now includes every user's sign-in, including the ones
+  UTMStack itself didn't place. Denied, dropped and failed events count as blocked attacks.
+- Every attacker IP in "Latest blocked / failed inbound" gets a **VPN**, **Tor** or **Hosting** badge when it comes
+  from a known VPN range, a Tor exit node or a datacenter/hosting range (where most VPNs and attack servers live).
+  City tooltips show how many connections came from such addresses.
+- With **All** selected, each blocked row shows which source reported it (Firewall, Syslog, Linux, …).
+- The street map and the traffic arcs now move together when you pan or zoom, and the map renders at a lighter
+  resolution so the animation stays smooth.
+- On first start after the update, the dashboard downloads its location database (~60 MB); Syslog/Linux/Windows
+  attackers show up on the map once that finishes (a few minutes).
+
+**Technical**
+- New `app/geoip.py`: DB-IP City Lite mmdb (CC BY 4.0, monthly) + X4BNet VPN / datacenter range lists + Tor bulk exit
+  list, stored in `DATA_DIR/geoip` and refreshed every 6 h when stale (lists weekly, DB monthly). IPs the local
+  database can't place go to proxycheck.io in a background queue (default cap 100/day, 7-day SQLite cache); set
+  `install.sh --proxycheck-key KEY` for a higher limit or `--geoip-online-daily 0` to switch it off. Private and
+  CGNAT/Tailscale addresses are never looked up. New dependency: `maxminddb==2.6.2`.
+- `build_geo()` split into `build_net_geo()` (types UTMStack geolocates) + `add_attackers()` per log type; one
+  failing source can't blank the map. `/api/geo` reports `geoip` status (DB date, list sizes, online lookups today).
+- Arc layer redraws on MapLibre's `render` event while the map moves (no one-frame lag); idle animation capped at
+  ~30 fps; map and arc layer use `pixelRatio` ≤ 1.25. Map credit starts folded.
+
 ## 1.9.0 — 2026-10-18
 
 **For users**

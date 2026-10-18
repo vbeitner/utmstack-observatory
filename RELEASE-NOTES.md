@@ -1,5 +1,13 @@
 # Release notes
 
+## 1.7.1 — 2026-10-18
+
+**For users**
+- Fixed: on narrower screens the map's filter buttons wrapped onto a second row that was hidden behind the map.
+
+**Technical**
+- `.map-filters` overrides `.panel-head`'s fixed 50 px height so wrapped rows stay visible.
+
 ## 1.7.0 — 2026-10-18
 
 **For users**

@@ -12,7 +12,7 @@ import urllib.error, urllib.request
 from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-VERSION = "1.6.0"
+VERSION = "1.6.1"
 HERE = os.path.dirname(os.path.abspath(__file__))
 if HERE not in sys.path:                          # the container runs "python3 -I", which leaves this folder off sys.path
     sys.path.insert(0, HERE)
@@ -1261,6 +1261,10 @@ def build_geo(window, dtype="all"):
         "_source": ["@timestamp", "origin.ip", "origin.geolocation.city", "origin.geolocation.country",
                     "origin.geolocation.countryCode", "origin.geolocation.latitude", "origin.geolocation.longitude",
                     "target.port", "protocol", "dataSource", "dataType"]})
+    if "aggregations" not in r:                  # no index for this type yet (e.g. Google not connected): empty map
+        return {"window_s": window, "type": dtype, "generated": datetime.now(timezone.utc).isoformat(), "age_s": None,
+                "total": 0, "denied": 0, "failed": 0, "per_min": 0, "home": current_home(), "sites": [], "arcs": [],
+                "arcs_total": 0, "countries": [], "ticker": []}
     a = r["aggregations"]
     total = r["hits"]["total"]["value"]
     denied, failed = _outcomes(a["outcome"]["buckets"])

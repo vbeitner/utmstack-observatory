@@ -1,5 +1,15 @@
 # Release notes
 
+## 1.6.1 — 2026-10-18
+
+**For users**
+- Fixed: choosing **Google** on the map showed an error. It now shows an empty map until Google logs start
+  arriving in UTMStack.
+
+**Technical**
+- `build_geo()` returns an empty payload when OpenSearch answers without `aggregations` (no index exists yet
+  for the type).
+
 ## 1.6.0 — 2026-10-18
 
 **For users**

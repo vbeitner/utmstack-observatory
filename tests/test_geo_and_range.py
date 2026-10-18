@@ -138,6 +138,11 @@ class GeoMap(unittest.TestCase):
         main = next(b for p, b in self.calls if "per_fw" in (b or {}).get("aggs", {}))
         self.assertIn({"terms": {"dataType.keyword": list(self.s.GEO_TYPES)}}, main["query"]["bool"]["filter"])
 
+    def test_type_with_no_index_gives_an_empty_map(self):
+        self.s.os_call = lambda path, body=None, method="POST": {"hits": {"total": {"value": 0}, "hits": []}}
+        g = self.s.build_geo(60, "google")
+        self.assertEqual((g["type"], g["total"], g["arcs"], g["ticker"]), ("google", 0, [], []))
+
     def test_cache_is_per_type(self):
         self.s.api_geo(60, dtype="all")
         n = len(self.calls)

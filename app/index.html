@@ -37,6 +37,9 @@ button{font-family:inherit;color:inherit;background:none;border:0;cursor:pointer
   .board>[data-widget]{grid-column:auto!important;grid-row:auto!important;min-height:var(--mobile-h,320px)}
   .board>[data-widget="kpis"]{--mobile-h:auto}
   .board>[data-widget="rate"]{--mobile-h:auto}
+  .board>[data-widget="map"]{--mobile-h:max(520px,72vh)}
+  .map-filters .seg{max-width:100%;overflow-x:auto}
+  .map-filters .seg button{flex:none}
   #editBtn{display:none}
 }
 .panel{background:var(--s1);border:1px solid var(--border);position:relative}
@@ -278,6 +281,13 @@ details.ev .kvt{margin:4px 0 8px}
 .map-wrap canvas{position:absolute;inset:0;width:100%;height:100%;display:block}
 .map-legend{position:absolute;left:12px;bottom:10px;display:flex;flex-wrap:wrap;gap:14px;font-family:var(--mono);font-size:11.5px;color:var(--ink2);background:rgba(7,10,15,.78);border:1px solid var(--border);padding:5px 9px}
 .map-legend i{display:inline-block;width:14px;height:2px;margin-right:6px;vertical-align:middle}
+.map-zoom{position:absolute;right:12px;bottom:10px;z-index:3;display:flex;flex-direction:column;gap:4px}
+.map-zoom button{width:34px;height:34px;border:1px solid var(--border-strong);background:rgba(7,10,15,.85);color:var(--ink);font-family:var(--mono);font-size:18px;line-height:1;cursor:pointer}
+.map-zoom button:hover,.map-zoom button:focus-visible{border-color:var(--cyan);color:var(--cyan)}
+.map-legend{max-width:calc(100% - 80px)}
+#mapCanvas.zoomed{cursor:grab}
+#mapCanvas.zoomed:active{cursor:grabbing}
+body.wall .map-zoom{display:none}
 .map-fallback{position:absolute;top:10px;left:12px;right:12px;z-index:3;display:flex;align-items:center;gap:12px;flex-wrap:wrap;padding:8px 12px;background:rgba(7,10,15,.85);border:1px solid var(--border)}
 .map-fallback[hidden]{display:none}           /* display:flex above would otherwise beat the hidden attribute */
 .map-fallback p{margin:0;flex:1;min-width:200px;color:var(--ink2);font-size:13.5px;line-height:1.45}
@@ -459,6 +469,11 @@ body.paused .mark-core,body.paused .tk.new,body.paused .live-dot{animation-play-
           <canvas id="mapCanvas" role="img" aria-label="World map of firewall connections: arcs from each firewall to the remote cities it is talking to."></canvas>
           <div class="tt" id="mapTip"></div>
           <div class="map-legend" aria-hidden="true"><span><i style="background:#35E7FF"></i>Outbound</span><span><i style="background:#68F5B1"></i>Inbound allowed</span><span><i style="background:#FF4D5E"></i>Denied</span><span><i style="background:#EAF7FF;height:6px;width:6px;border-radius:50%"></i>Firewall</span></div>
+          <div class="map-zoom" role="group" aria-label="Map zoom">
+            <button id="mapZoomIn" aria-label="Zoom in" title="Zoom in (or scroll / pinch)">+</button>
+            <button id="mapZoomOut" aria-label="Zoom out" title="Zoom out">−</button>
+            <button id="mapZoomReset" aria-label="Reset zoom" title="Show the whole map">⟲</button>
+          </div>
           <div class="map-fallback" id="mapFallback" hidden>
             <p id="mapFallbackText"></p>
             <button class="ghost-btn" id="mapFallbackBtn">View this source's events</button>
@@ -994,6 +1009,7 @@ body.paused .mark-core,body.paused .tk.new,body.paused .live-dot{animation-play-
   var HOVER_ZOOM = 3.2;
   var hoverPin = null;                             // {lat, lon, label} while a row with coordinates is hovered
   var camX = 0, camY = 0, camZ = 1;                 // eased camera focus (base-projection pixels) and zoom
+  var userZ = 1, userX = null, userY = null, viewW = 0, viewH = 0, snapCam = false, MAX_ZOOM = 8;   // user's own zoom/pan
   fetch('/land.json', {cache:'force-cache'}).then(function(r){ return r.json(); })
     .then(function(d){ LAND = d.rings; landCache = null; drawMap(frameT()); }).catch(function(){});
 
@@ -1006,22 +1022,24 @@ body.paused .mark-core,body.paused .tk.new,body.paused .live-dot{animation-play-
     var ox = w/2 - (c+180)*s, oy = (h - latSpan*s)/2;
     return function(lon, lat){ return [ox + (lon+180)*s, oy + (latN-lat)*s]; };
   }
-  function landLayer(w, h, d){
-    if(landCache && landCache.w===w && landCache.h===h) return landCache.cv;
-    var cv = document.createElement('canvas'); cv.width = Math.round(w*d); cv.height = Math.round(h*d);
-    var ctx = cv.getContext('2d'); ctx.setTransform(d,0,0,d,0,0);
-    var P = view(w, h);
-    ctx.strokeStyle = 'rgba(53,231,255,.06)'; ctx.lineWidth = 1;          // graticule
+  function drawLand(ctx, P, z){
+    ctx.strokeStyle = 'rgba(53,231,255,.06)'; ctx.lineWidth = 1/z;        // graticule
     for(var lo=-180; lo<=180; lo+=30){ var a=P(lo,78), b=P(lo,-56); ctx.beginPath(); ctx.moveTo(a[0],a[1]); ctx.lineTo(b[0],b[1]); ctx.stroke(); }
     for(var la=-30; la<=60; la+=30){ var c=P(-180,la), e=P(180,la); ctx.beginPath(); ctx.moveTo(c[0],c[1]); ctx.lineTo(e[0],e[1]); ctx.stroke(); }
     if(LAND){
-      ctx.fillStyle = '#0F2131'; ctx.strokeStyle = '#1E3A50'; ctx.lineWidth = .8;
+      ctx.fillStyle = '#0F2131'; ctx.strokeStyle = '#1E3A50'; ctx.lineWidth = .8/z;
       LAND.forEach(function(r){
         ctx.beginPath();
         for(var i=0;i<r.length;i+=2){ var p = P(r[i], r[i+1]); if(i) ctx.lineTo(p[0],p[1]); else ctx.moveTo(p[0],p[1]); }
         ctx.closePath(); ctx.fill(); ctx.stroke();
       });
     }
+  }
+  function landLayer(w, h, d){
+    if(landCache && landCache.w===w && landCache.h===h) return landCache.cv;
+    var cv = document.createElement('canvas'); cv.width = Math.round(w*d); cv.height = Math.round(h*d);
+    var ctx = cv.getContext('2d'); ctx.setTransform(d,0,0,d,0,0);
+    drawLand(ctx, view(w, h), 1);
     landCache = {w:w, h:h, cv:cv};
     return cv;
   }
@@ -1061,19 +1079,22 @@ body.paused .mark-core,body.paused .tk.new,body.paused .live-dot{animation-play-
     var f = fit(mapCv), ctx = f.ctx, w = f.w, h = f.h, d = Math.min(window.devicePixelRatio||1,2);
     ctx.clearRect(0,0,w,h);
     var P = view(w, h);
-    var tz = 1, tx = w/2, ty = h/2;
+    if(userX==null || viewW!==w || viewH!==h){ userZ = 1; userX = w/2; userY = h/2; viewW = w; viewH = h; }
+    var tz = userZ, tx = userX, ty = userY;
     if(hoverPin && hoverPin.lat!=null && hoverPin.lon!=null){
-      var fp = P(hoverPin.lon, hoverPin.lat); tz = HOVER_ZOOM; tx = fp[0]; ty = fp[1];
+      var fp = P(hoverPin.lon, hoverPin.lat); tz = Math.max(HOVER_ZOOM, userZ); tx = fp[0]; ty = fp[1];
     }
-    if(liveOn){ camZ += (tz-camZ)*.15; camX += (tx-camX)*.15; camY += (ty-camY)*.15; }
-    else { camZ = tz; camX = tx; camY = ty; }
+    if(liveOn && !snapCam){ camZ += (tz-camZ)*.15; camX += (tx-camX)*.15; camY += (ty-camY)*.15; }
+    else { camZ = tz; camX = tx; camY = ty; snapCam = false; }
+    var toScr = function(p){ return [w/2 + camZ*(p[0]-camX), h/2 + camZ*(p[1]-camY)]; };
     ctx.save(); ctx.translate(w/2, h/2); ctx.scale(camZ, camZ); ctx.translate(-camX, -camY);
-    ctx.drawImage(landLayer(w,h,d), 0, 0, w, h);
+    if(camZ > 1.05) drawLand(ctx, P, camZ);               // vector land stays sharp when zoomed in
+    else ctx.drawImage(landLayer(w,h,d), 0, 0, w, h);
     if(!G || !G.sites){ ctx.restore(); return; }
     var byId = {}, maxC = 1, t = (now||0)/1000, arcs = dirArcs();
     G.sites.forEach(function(s){ byId[s.id] = s; s._p = P(s.lon, s.lat); });
     arcs.forEach(function(a){ if(a.count>maxC) maxC = a.count; });
-    if(!hoverPin) mapHits = [];                          // zoomed/panned: screen-space hit-testing below would be wrong
+    if(!hoverPin) mapHits = [];                          // hit targets are kept in screen pixels (see toScr)
     var ends = {};
     arcs.forEach(function(a, i){
       var s = byId[a.site]; if(!s) return;
@@ -1103,7 +1124,7 @@ body.paused .mark-core,body.paused .tk.new,body.paused .live-dot{animation-play-
         ctx.strokeStyle = hexA(C_DENY, .55*(1-pulse)); ctx.lineWidth = 1.2/camZ; ctx.stroke();
       }
       ctx.beginPath(); ctx.arc(e.p[0], e.p[1], r, 0, Math.PI*2); ctx.fillStyle = hexA(col, .85); ctx.fill();
-      if(!hoverPin) mapHits.push({x:e.p[0], y:e.p[1], r:Math.max(7,r+3), kind:'remote', e:e});
+      if(!hoverPin){ var q = toScr(e.p); mapHits.push({x:q[0], y:q[1], r:Math.max(7, r*camZ+3), kind:'remote', e:e}); }
     });
     G.sites.forEach(function(s){                          // firewalls on top
       var p = s._p, busy = s.total ? Math.min(1, Math.log(1+s.total)/Math.log(1+3000)) : 0, r = (3.5 + 3*busy)/camZ;
@@ -1113,7 +1134,7 @@ body.paused .mark-core,body.paused .tk.new,body.paused .live-dot{animation-play-
       }
       ctx.beginPath(); ctx.arc(p[0], p[1], r+3/camZ, 0, Math.PI*2); ctx.fillStyle = 'rgba(53,231,255,.18)'; ctx.fill();
       ctx.beginPath(); ctx.arc(p[0], p[1], r, 0, Math.PI*2); ctx.fillStyle = s.total ? '#EAF7FF' : '#8299AB'; ctx.fill();
-      if(!hoverPin) mapHits.push({x:p[0], y:p[1], r:Math.max(9,r+4), kind:'site', s:s});
+      if(!hoverPin){ var q2 = toScr(p); mapHits.push({x:q2[0], y:q2[1], r:Math.max(9, r*camZ+4), kind:'site', s:s}); }
     });
     ctx.restore();
     if(hoverPin){                                         // the focus point rides toward screen centre as the camera eases in
@@ -1200,9 +1221,8 @@ body.paused .mark-core,body.paused .tk.new,body.paused .live-dot{animation-play-
     if(G){ renderMapSide(); drawMap(frameT()); }
   }); });
   $('#mapFallbackBtn').addEventListener('click', function(){ openDig({name:'sources', tab:'source', type:mapType}, true); });
-  mapCv.addEventListener('mousemove', function(ev){
-    if(hoverPin) return;                               // a hovered row owns the tooltip and the camera right now
-    var r = mapCv.getBoundingClientRect(), x = ev.clientX-r.left, y = ev.clientY-r.top, best = null, bd = 1e9;
+  function tipAt(x, y, r){
+    var best = null, bd = 1e9;
     mapHits.forEach(function(hh){ var dx=hh.x-x, dy=hh.y-y, dd=dx*dx+dy*dy; if(dd < hh.r*hh.r && dd < bd){ bd = dd; best = hh; } });
     if(!best){ mapTip.classList.remove('on'); return; }
     var html;
@@ -1216,9 +1236,72 @@ body.paused .mark-core,body.paused .tk.new,body.paused .live-dot{animation-play-
     }
     mapTip.innerHTML = html; mapTip.classList.add('on');
     var tw = mapTip.offsetWidth, th = mapTip.offsetHeight;
-    mapTip.style.left = Math.min(r.width-tw-6, x+14)+'px'; mapTip.style.top = Math.max(6, Math.min(r.height-th-6, y-th-8))+'px';
+    mapTip.style.left = Math.max(6, Math.min(r.width-tw-6, x+14))+'px'; mapTip.style.top = Math.max(6, Math.min(r.height-th-6, y-th-8))+'px';
+  }
+  mapCv.addEventListener('mousemove', function(ev){
+    if(hoverPin || drag) return;                       // a hovered row owns the tooltip and the camera; no tips mid-drag
+    var r = mapCv.getBoundingClientRect();
+    tipAt(ev.clientX-r.left, ev.clientY-r.top, r);
   });
   mapCv.addEventListener('mouseleave', function(){ if(!hoverPin) mapTip.classList.remove('on'); });
+
+  /* ---- zoom and pan: buttons, wheel, double-click, drag, pinch; a tap shows the tooltip on touch screens ---- */
+  function redrawMap(){ mapCv.style.touchAction = userZ > 1 ? 'none' : 'pan-y'; mapCv.classList.toggle('zoomed', userZ > 1);
+                        if(!liveOn || reduceMotion) drawMap(frameT()); }
+  function clampView(){
+    var hw = viewW/(2*userZ), hh = viewH/(2*userZ);
+    userX = Math.max(hw, Math.min(viewW-hw, userX)); userY = Math.max(hh, Math.min(viewH-hh, userY));
+  }
+  function zoomAt(f, sx, sy, snap){                   // keep the map point under (sx, sy) fixed while zooming
+    if(userX==null || !viewW) return;
+    var nz = Math.max(1, Math.min(MAX_ZOOM, userZ*f));
+    var bx = userX + (sx - viewW/2)/userZ, by = userY + (sy - viewH/2)/userZ;
+    userZ = nz; userX = bx - (sx - viewW/2)/nz; userY = by - (sy - viewH/2)/nz;
+    clampView(); if(snap) snapCam = true; redrawMap();
+  }
+  $('#mapZoomIn').addEventListener('click', function(){ zoomAt(1.6, viewW/2, viewH/2); });
+  $('#mapZoomOut').addEventListener('click', function(){ zoomAt(1/1.6, viewW/2, viewH/2); });
+  $('#mapZoomReset').addEventListener('click', function(){ userZ = 1; userX = viewW/2; userY = viewH/2; redrawMap(); });
+  mapCv.addEventListener('wheel', function(e){
+    e.preventDefault();
+    var r = mapCv.getBoundingClientRect();
+    zoomAt(Math.exp(-e.deltaY * (e.deltaMode ? 0.05 : 0.0015)), e.clientX-r.left, e.clientY-r.top, true);
+  }, {passive:false});
+  mapCv.addEventListener('dblclick', function(e){ var r = mapCv.getBoundingClientRect(); zoomAt(2, e.clientX-r.left, e.clientY-r.top); });
+  var ptrs = {}, drag = null;
+  function ptrList(){ return Object.keys(ptrs).map(function(k){ return ptrs[k]; }); }
+  mapCv.addEventListener('pointerdown', function(e){
+    if(e.pointerType==='mouse' && e.button!==0) return;
+    try { mapCv.setPointerCapture(e.pointerId); } catch(_) {}
+    ptrs[e.pointerId] = {x:e.clientX, y:e.clientY};
+    var l = ptrList();
+    drag = {moved:false, sx:e.clientX, sy:e.clientY, dist: l.length===2 ? Math.hypot(l[0].x-l[1].x, l[0].y-l[1].y) : 0};
+  });
+  mapCv.addEventListener('pointermove', function(e){
+    var p = ptrs[e.pointerId]; if(!p || !drag) return;
+    var dx = e.clientX-p.x, dy = e.clientY-p.y; p.x = e.clientX; p.y = e.clientY;
+    if(Math.abs(e.clientX-drag.sx) + Math.abs(e.clientY-drag.sy) > 6) drag.moved = true;
+    var l = ptrList(), r = mapCv.getBoundingClientRect();
+    if(l.length===2){                                  // pinch: zoom around the midpoint
+      var dist = Math.hypot(l[0].x-l[1].x, l[0].y-l[1].y);
+      if(drag.dist) zoomAt(dist/drag.dist, (l[0].x+l[1].x)/2-r.left, (l[0].y+l[1].y)/2-r.top, true);
+      drag.dist = dist; drag.moved = true;
+    } else if(l.length===1 && userZ > 1 && drag.moved){
+      userX -= dx/userZ; userY -= dy/userZ; clampView(); snapCam = true; mapTip.classList.remove('on'); redrawMap();
+    }
+  });
+  function ptrEnd(e){
+    if(!ptrs[e.pointerId]) return;
+    delete ptrs[e.pointerId];
+    if(drag && !drag.moved && e.type==='pointerup' && e.pointerType!=='mouse' && !hoverPin){
+      var r = mapCv.getBoundingClientRect(); tipAt(e.clientX-r.left, e.clientY-r.top, r);
+    }
+    if(!ptrList().length) drag = null;
+    else drag.dist = 0;                                // one finger lifted from a pinch: restart the distance
+  }
+  mapCv.addEventListener('pointerup', ptrEnd);
+  mapCv.addEventListener('pointercancel', ptrEnd);
+  redrawMap();
 
   /* ---- hover a Latest-Alerts or Latest-blocked-inbound row: zoom the map to its location ---- */
   function positionPinTip(mx, my){

@@ -1,5 +1,20 @@
 # Release notes
 
+## 1.8.0 — 2026-10-18
+
+**For users**
+- The Live Firewall Map zooms and pans: use the **+ / − / ⟲** buttons (bottom right), the mouse wheel or a
+  double-click to zoom, and drag to move around once zoomed in. On phones and tablets, pinch to zoom and drag
+  with one finger; until you zoom in, a one-finger swipe still scrolls the page.
+- On touch screens, tap a city or firewall dot to see its details (desktop still shows them on hover).
+- On phones the map is taller, and the filter buttons scroll sideways instead of being cut off. The animations
+  run on phones too (unless the device has "Reduce motion" turned on).
+
+**Technical**
+- User zoom/pan drives the same eased camera as the existing hover-to-zoom; land is drawn as vectors when zoomed
+  (stays sharp) and from the cached raster at 1×. Hit targets are now stored in screen pixels so tooltips line
+  up at any zoom. Canvas `touch-action` is `pan-y` at 1× and `none` once zoomed. Zoom range 1–8×.
+
 ## 1.7.1 — 2026-10-18
 
 **For users**

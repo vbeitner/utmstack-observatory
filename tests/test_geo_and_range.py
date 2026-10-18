@@ -238,5 +238,14 @@ class Packaging(unittest.TestCase):
         with open(os.path.join(ROOT, "app", "land.json")) as f:
             self.assertGreater(len(json.load(f)["rings"]), 100)
 
+    def test_street_map_assets_are_shipped_and_only_the_tile_host_is_allowed(self):
+        s = load_server()
+        for path in s.STATIC_FILES:
+            self.assertTrue(os.path.getsize(os.path.join(ROOT, "app", path[1:])) > 10000, path)
+        with open(os.path.join(ROOT, "app", "index.html")) as f:
+            page = f.read()
+        self.assertIn(s.TILE_HOST + "/styles/", page)
+        self.assertEqual(s.TILE_HOST, "https://tiles.openfreemap.org")
+
 if __name__ == "__main__":
     unittest.main()

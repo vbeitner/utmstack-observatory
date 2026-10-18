@@ -12,7 +12,7 @@ import urllib.error, urllib.request
 from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-VERSION = "1.8.0"
+VERSION = "1.9.0"
 HERE = os.path.dirname(os.path.abspath(__file__))
 if HERE not in sys.path:                          # the container runs "python3 -I", which leaves this folder off sys.path
     sys.path.insert(0, HERE)
@@ -1118,6 +1118,9 @@ FW_SEARCH = "/v11-log-firewall-sophos-xg-*/_search"
 # Data types whose logs carry origin/target geolocation; "all" means every one of them together.
 GEO_TYPES = ("firewall-sophos-xg", "o365", "google")
 GEO_WINDOWS_S = (60, 300, 900)
+# Street basemap: MapLibre is served from here; only map tiles, fonts and icons come from this one host.
+TILE_HOST = "https://tiles.openfreemap.org"
+STATIC_FILES = {"/maplibre-gl.js": "text/javascript; charset=utf-8", "/maplibre-gl.css": "text/css; charset=utf-8"}
 GEO_TTL_S = 10                                   # one shared query per 10 s, however many viewers
 SITE_TTL_S = 1800                                # re-check firewall locations every 30 min
 MAX_ARCS = 200
@@ -1524,8 +1527,9 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("X-Content-Type-Options", "nosniff")
         self.send_header("X-Frame-Options", "DENY")
         self.send_header("Referrer-Policy", "no-referrer")
-        self.send_header("Content-Security-Policy", "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'unsafe-inline'; "
-                         "img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'")
+        self.send_header("Content-Security-Policy", "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; "
+                         "img-src 'self' data: blob: %s; connect-src 'self' %s; worker-src blob:; child-src blob:; "
+                         "frame-ancestors 'none'; base-uri 'none'; form-action 'none'" % (TILE_HOST, TILE_HOST))
         if isinstance(self.connection, ssl.SSLSocket):
             self.send_header("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
         for k, v in (extra or {}).items():
@@ -1618,6 +1622,9 @@ class Handler(BaseHTTPRequestHandler):
         elif u.path == "/api/layout":
             lay, notes = layout_store.load_with_notes(DATA_DIR)
             self.send(200, "application/json", json.dumps({"layout": lay, "notes": notes}).encode())
+        elif u.path in STATIC_FILES:
+            with open(os.path.join(HERE, u.path[1:]), "rb") as f:
+                self.send(200, STATIC_FILES[u.path], f.read(), {"Cache-Control": "private, max-age=86400"})
         elif u.path == "/land.json":                  # static world outline for the live map
             with open(os.path.join(HERE, "land.json"), "rb") as f:
                 self.send(200, "application/json", f.read(), {"Cache-Control": "private, max-age=86400"})

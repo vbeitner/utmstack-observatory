@@ -281,6 +281,9 @@ details.ev .kvt{margin:4px 0 8px}
 .map-wrap canvas{position:absolute;inset:0;width:100%;height:100%;display:block}
 .map-legend{position:absolute;left:12px;bottom:10px;display:flex;flex-wrap:wrap;gap:14px;font-family:var(--mono);font-size:11.5px;color:var(--ink2);background:rgba(7,10,15,.78);border:1px solid var(--border);padding:5px 9px}
 .map-legend i{display:inline-block;width:14px;height:2px;margin-right:6px;vertical-align:middle}
+#mapBase{position:absolute;inset:0}
+.map-wrap.has-base #mapCanvas{pointer-events:none}
+.map-wrap .maplibregl-ctrl-attrib{font-size:10.5px}
 .map-zoom{position:absolute;right:12px;bottom:10px;z-index:3;display:flex;flex-direction:column;gap:4px}
 .map-zoom button{width:34px;height:34px;border:1px solid var(--border-strong);background:rgba(7,10,15,.85);color:var(--ink);font-family:var(--mono);font-size:18px;line-height:1;cursor:pointer}
 .map-zoom button:hover,.map-zoom button:focus-visible{border-color:var(--cyan);color:var(--cyan)}
@@ -366,6 +369,7 @@ body.editing .edit-bar{display:flex}
 body.paused .mark-core,body.paused .tk.new,body.paused .live-dot{animation-play-state:paused}
 @media (prefers-reduced-motion:reduce){*,*::before,*::after{animation-duration:.001ms!important;transition-duration:.001ms!important}}
 </style>
+<link rel="stylesheet" href="/maplibre-gl.css">
 </head>
 <body>
 <div class="shell">
@@ -466,6 +470,7 @@ body.paused .mark-core,body.paused .tk.new,body.paused .live-dot{animation-play-
       </div>
       <div class="map-body">
         <div class="map-wrap" id="mapWrap">
+          <div id="mapBase"></div>
           <canvas id="mapCanvas" role="img" aria-label="World map of firewall connections: arcs from each firewall to the remote cities it is talking to."></canvas>
           <div class="tt" id="mapTip"></div>
           <div class="map-legend" aria-hidden="true"><span><i style="background:#35E7FF"></i>Outbound</span><span><i style="background:#68F5B1"></i>Inbound allowed</span><span><i style="background:#FF4D5E"></i>Denied</span><span><i style="background:#EAF7FF;height:6px;width:6px;border-radius:50%"></i>Firewall</span></div>
@@ -633,6 +638,7 @@ body.paused .mark-core,body.paused .tk.new,body.paused .live-dot{animation-play-
   <div class="drawer-body" id="repBody"><div class="empty">Loading…</div></div>
 </aside>
 
+<script src="/maplibre-gl.js"></script>
 <script src="/layout.js"></script>
 <script>
 (function(){
@@ -1010,6 +1016,7 @@ body.paused .mark-core,body.paused .tk.new,body.paused .live-dot{animation-play-
   var hoverPin = null;                             // {lat, lon, label} while a row with coordinates is hovered
   var camX = 0, camY = 0, camZ = 1;                 // eased camera focus (base-projection pixels) and zoom
   var userZ = 1, userX = null, userY = null, viewW = 0, viewH = 0, snapCam = false, MAX_ZOOM = 8;   // user's own zoom/pan
+  var BASE = null, WORLD = [[-170, -56], [180, 78]], pinPrevView = null;   // MapLibre street map, once it has loaded
   fetch('/land.json', {cache:'force-cache'}).then(function(r){ return r.json(); })
     .then(function(d){ LAND = d.rings; landCache = null; drawMap(frameT()); }).catch(function(){});
 
@@ -1078,18 +1085,27 @@ body.paused .mark-core,body.paused .tk.new,body.paused .live-dot{animation-play-
     if(!mapCv.offsetParent) return;                     // panel hidden (wall mode on another view)
     var f = fit(mapCv), ctx = f.ctx, w = f.w, h = f.h, d = Math.min(window.devicePixelRatio||1,2);
     ctx.clearRect(0,0,w,h);
-    var P = view(w, h);
-    if(userX==null || viewW!==w || viewH!==h){ userZ = 1; userX = w/2; userY = h/2; viewW = w; viewH = h; }
-    var tz = userZ, tx = userX, ty = userY;
-    if(hoverPin && hoverPin.lat!=null && hoverPin.lon!=null){
-      var fp = P(hoverPin.lon, hoverPin.lat); tz = Math.max(HOVER_ZOOM, userZ); tx = fp[0]; ty = fp[1];
+    var P, tz, tx, ty;
+    if(BASE){                                            // street basemap owns zoom/pan: project through it, no camera
+      P = function(lon, lat){ var q = BASE.project([lon, lat]); return [q.x, q.y]; };
+      camZ = 1; camX = tx = w/2; camY = ty = h/2; viewW = w; viewH = h;
+      if(hoverPin && hoverPin.lat!=null && hoverPin.lon!=null){ var bp = P(hoverPin.lon, hoverPin.lat); tx = bp[0]; ty = bp[1]; }
+    } else {
+      P = view(w, h);
+      if(userX==null || viewW!==w || viewH!==h){ userZ = 1; userX = w/2; userY = h/2; viewW = w; viewH = h; }
+      tz = userZ; tx = userX; ty = userY;
+      if(hoverPin && hoverPin.lat!=null && hoverPin.lon!=null){
+        var fp = P(hoverPin.lon, hoverPin.lat); tz = Math.max(HOVER_ZOOM, userZ); tx = fp[0]; ty = fp[1];
+      }
+      if(liveOn && !snapCam){ camZ += (tz-camZ)*.15; camX += (tx-camX)*.15; camY += (ty-camY)*.15; }
+      else { camZ = tz; camX = tx; camY = ty; snapCam = false; }
     }
-    if(liveOn && !snapCam){ camZ += (tz-camZ)*.15; camX += (tx-camX)*.15; camY += (ty-camY)*.15; }
-    else { camZ = tz; camX = tx; camY = ty; snapCam = false; }
     var toScr = function(p){ return [w/2 + camZ*(p[0]-camX), h/2 + camZ*(p[1]-camY)]; };
     ctx.save(); ctx.translate(w/2, h/2); ctx.scale(camZ, camZ); ctx.translate(-camX, -camY);
-    if(camZ > 1.05) drawLand(ctx, P, camZ);               // vector land stays sharp when zoomed in
-    else ctx.drawImage(landLayer(w,h,d), 0, 0, w, h);
+    if(!BASE){
+      if(camZ > 1.05) drawLand(ctx, P, camZ);             // vector land stays sharp when zoomed in
+      else ctx.drawImage(landLayer(w,h,d), 0, 0, w, h);
+    }
     if(!G || !G.sites){ ctx.restore(); return; }
     var byId = {}, maxC = 1, t = (now||0)/1000, arcs = dirArcs();
     G.sites.forEach(function(s){ byId[s.id] = s; s._p = P(s.lon, s.lat); });
@@ -1259,9 +1275,12 @@ body.paused .mark-core,body.paused .tk.new,body.paused .live-dot{animation-play-
     userZ = nz; userX = bx - (sx - viewW/2)/nz; userY = by - (sy - viewH/2)/nz;
     clampView(); if(snap) snapCam = true; redrawMap();
   }
-  $('#mapZoomIn').addEventListener('click', function(){ zoomAt(1.6, viewW/2, viewH/2); });
-  $('#mapZoomOut').addEventListener('click', function(){ zoomAt(1/1.6, viewW/2, viewH/2); });
-  $('#mapZoomReset').addEventListener('click', function(){ userZ = 1; userX = viewW/2; userY = viewH/2; redrawMap(); });
+  $('#mapZoomIn').addEventListener('click', function(){ if(BASE) BASE.zoomIn(); else zoomAt(1.6, viewW/2, viewH/2); });
+  $('#mapZoomOut').addEventListener('click', function(){ if(BASE) BASE.zoomOut(); else zoomAt(1/1.6, viewW/2, viewH/2); });
+  $('#mapZoomReset').addEventListener('click', function(){
+    if(BASE){ BASE.fitBounds(WORLD, {padding:10}); return; }
+    userZ = 1; userX = viewW/2; userY = viewH/2; redrawMap();
+  });
   mapCv.addEventListener('wheel', function(e){
     e.preventDefault();
     var r = mapCv.getBoundingClientRect();
@@ -1303,6 +1322,31 @@ body.paused .mark-core,body.paused .tk.new,body.paused .live-dot{animation-play-
   mapCv.addEventListener('pointercancel', ptrEnd);
   redrawMap();
 
+  /* ---- street basemap (MapLibre + OpenFreeMap tiles); the outline map above stays as the fallback ---- */
+  function initBase(){
+    if(!window.maplibregl) return;
+    var ready = false, m;
+    try {
+      m = new maplibregl.Map({container: 'mapBase', style: 'https://tiles.openfreemap.org/styles/dark', bounds: WORLD,
+        fitBoundsOptions: {padding: 10}, renderWorldCopies: false, attributionControl: false, maxZoom: 18,
+        dragRotate: false, pitchWithRotate: false, touchPitch: false,
+        cooperativeGestures: !!(window.matchMedia && matchMedia('(pointer: coarse)').matches)});   // phones: 2 fingers move the map
+    } catch(e){ return; }                              // no WebGL
+    m.touchZoomRotate.disableRotation();
+    m.addControl(new maplibregl.AttributionControl({compact: true}), 'top-right');
+    m.on('load', function(){
+      ready = true; BASE = m; mapWrap.classList.add('has-base'); mapTip.classList.remove('on'); drawMap(frameT());
+    });
+    m.on('move', function(){ if(BASE && (!liveOn || reduceMotion)) drawMap(frameT()); });
+    var tip = function(e){ if(BASE && !hoverPin) tipAt(e.point.x, e.point.y, mapCv.getBoundingClientRect()); };
+    m.on('mousemove', tip); m.on('click', tip);
+    m.on('mouseout', function(){ if(!hoverPin) mapTip.classList.remove('on'); });
+    m.on('dragstart', function(){ mapTip.classList.remove('on'); });
+    setTimeout(function(){ if(!ready){ try { m.remove(); } catch(_) {} } }, 12000);   // tiles unreachable: keep the outline map
+  }
+  if(window.ResizeObserver) new ResizeObserver(function(){ if(BASE) BASE.resize(); landCache = null; drawMap(frameT()); }).observe(mapWrap);
+  initBase();
+
   /* ---- hover a Latest-Alerts or Latest-blocked-inbound row: zoom the map to its location ---- */
   function positionPinTip(mx, my){
     var r = mapCv.getBoundingClientRect(), tw = mapTip.offsetWidth, th = mapTip.offsetHeight;
@@ -1313,11 +1357,16 @@ body.paused .mark-core,body.paused .tk.new,body.paused .live-dot{animation-play-
     if(isNaN(lat) || isNaN(lon)) return;
     hoverPin = {lat:lat, lon:lon};
     mapTip.innerHTML = label; mapTip.classList.add('on');
+    if(BASE){
+      if(!pinPrevView) pinPrevView = {center: BASE.getCenter(), zoom: BASE.getZoom()};
+      BASE.easeTo({center: [lon, lat], zoom: Math.max(BASE.getZoom(), 5), duration: reduceMotion ? 0 : 700});
+    }
     if(!liveOn || reduceMotion) drawMap(frameT());       // snap at once when nothing else is driving redraws
   }
   function pinOff(){
     if(!hoverPin) return;
     hoverPin = null; mapTip.classList.remove('on');
+    if(BASE && pinPrevView){ BASE.easeTo({center: pinPrevView.center, zoom: pinPrevView.zoom, duration: reduceMotion ? 0 : 700}); pinPrevView = null; }
     if(!liveOn || reduceMotion) drawMap(frameT());
   }
   function rowPin(el){

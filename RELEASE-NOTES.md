@@ -1,5 +1,27 @@
 # Release notes
 
+## 1.9.0 — 2026-10-18
+
+**For users**
+- The Live Firewall Map now sits on a detailed dark street map (OpenStreetMap data). Zoom in to see countries,
+  cities, roads and street names under the animated traffic arcs. Zoom with the mouse wheel, a double-click, or
+  the + / − / ⟲ buttons; drag to move. On phones, pinch to zoom and use two fingers to move the map — one finger
+  keeps scrolling the page.
+- Keep in mind that IP locations are city-level at best (often only the country), so a dot shows the area a
+  connection came from, never an exact street address.
+- If the street map can't load (no internet on the viewing computer, or no WebGL), the dashboard keeps the
+  previous outline map with its own zoom, as before.
+- Each viewer's browser now loads map tiles from tiles.openfreemap.org (free OpenStreetMap service, no account).
+  That service sees the viewer's IP and which map area is open, but not the dashboard's data or address.
+
+**Technical**
+- MapLibre GL JS 4.7.1 is vendored (`app/maplibre-gl.js`/`.css`, BSD-3, `app/MAPLIBRE-LICENSE.txt`) and served
+  by the dashboard; only tiles, fonts and sprites come from `TILE_HOST`. CSP adds that one host to `img-src`/
+  `connect-src`, plus `worker-src blob:` (MapLibre's worker) and `style-src 'self'`.
+- The animation canvas stays on top; when the basemap is up, arcs project through `map.project()` and the
+  canvas passes pointer events through to MapLibre. Hover-to-zoom on ticker rows uses `easeTo` and restores the
+  previous view. Falls back to the built-in outline map if the style hasn't loaded within 12 s.
+
 ## 1.8.0 — 2026-10-18
 
 **For users**

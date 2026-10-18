@@ -1,5 +1,16 @@
 # Release notes
 
+## 1.7.0 — 2026-10-18
+
+**For users**
+- New **All / Allowed / Denied** switch on the Live Firewall Map. Combine it with the source and
+  Inbound / Outbound switches — for example, Firewall + Inbound + Denied shows only blocked attempts coming in.
+  Top countries follow the same selection.
+
+**Technical**
+- Client-side only: `dirArcs()` now applies direction and outcome to the already-fetched arcs (allowed =
+  `count - denied`), no new API call. Headline stats (connections/min, denied %) stay totals.
+
 ## 1.6.2 — 2026-10-18
 
 **For users**

@@ -450,6 +450,9 @@ body.paused .mark-core,body.paused .tk.new,body.paused .live-dot{animation-play-
         <div class="seg" id="mapDirSeg" role="group" aria-label="Traffic direction">
           <button data-dir="all" aria-pressed="true">All</button><button data-dir="in" aria-pressed="false">Inbound</button><button data-dir="out" aria-pressed="false">Outbound</button>
         </div>
+        <div class="seg" id="mapOutSeg" role="group" aria-label="Allowed or denied traffic">
+          <button data-out="all" aria-pressed="true">All</button><button data-out="allowed" aria-pressed="false">Allowed</button><button data-out="denied" aria-pressed="false">Denied</button>
+        </div>
       </div>
       <div class="map-body">
         <div class="map-wrap" id="mapWrap">
@@ -981,7 +984,7 @@ body.paused .mark-core,body.paused .tk.new,body.paused .live-dot{animation-play-
   /* ---------- live firewall map ---------- */
   var mapCv = $('#mapCanvas'), mapTip = $('#mapTip'), mapWrap = $('#mapWrap');
   var LAND = null, G = null, mapWin = 60, mapAnon = false, mapHits = [], landCache = null, seenTicks = {};
-  var mapType = 'all', mapDir = 'all';
+  var mapType = 'all', mapDir = 'all', mapOut = 'all';
   // types whose logs carry origin/target geolocation (keep in step with GEO_TYPES in server.py); the rest get a note
   var GEO_TYPES = {'all': true, 'firewall-sophos-xg': true, 'o365': true, 'google': true};
   var MAP_TYPE_LABEL = {'all': 'all sources', 'firewall-sophos-xg': 'firewall', 'o365': 'Microsoft 365', 'google': 'Google',
@@ -1023,10 +1026,20 @@ body.paused .mark-core,body.paused .tk.new,body.paused .live-dot{animation-play-
     return cv;
   }
   function arcColor(a){ return a.denied*2 >= a.count ? C_DENY : (a.dir==='in' ? C_IN : C_OUT); }
-  function dirArcs(){ return !G ? [] : (mapDir==='all' ? G.arcs : G.arcs.filter(function(a){ return a.dir===mapDir; })); }
+  function dirArcs(){
+    if(!G) return [];
+    var out = [];
+    G.arcs.forEach(function(a){
+      if(mapDir!=='all' && a.dir!==mapDir) return;
+      if(mapOut==='all'){ out.push(a); return; }
+      var n = mapOut==='denied' ? a.denied : a.count - a.denied;
+      if(n > 0) out.push(Object.assign({}, a, {count:n, denied: mapOut==='denied' ? n : 0}));
+    });
+    return out;
+  }
   function dirCountries(){
     if(!G) return [];
-    if(mapDir==='all') return G.countries;
+    if(mapDir==='all' && mapOut==='all') return G.countries;
     var by = {};
     dirArcs().forEach(function(a){
       var c = by[a.cc] || (by[a.cc] = {cc:a.cc, country:a.country, count:0, denied:0, 'in':0, out:0});
@@ -1180,6 +1193,10 @@ body.paused .mark-core,body.paused .tk.new,body.paused .live-dot{animation-play-
   }); });
   $$('#mapDirSeg button').forEach(function(b){ b.addEventListener('click', function(){
     mapDir = b.dataset.dir; $$('#mapDirSeg button').forEach(function(x){ x.setAttribute('aria-pressed', String(x===b)); });
+    if(G){ renderMapSide(); drawMap(frameT()); }
+  }); });
+  $$('#mapOutSeg button').forEach(function(b){ b.addEventListener('click', function(){
+    mapOut = b.dataset.out; $$('#mapOutSeg button').forEach(function(x){ x.setAttribute('aria-pressed', String(x===b)); });
     if(G){ renderMapSide(); drawMap(frameT()); }
   }); });
   $('#mapFallbackBtn').addEventListener('click', function(){ openDig({name:'sources', tab:'source', type:mapType}, true); });

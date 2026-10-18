@@ -1,5 +1,11 @@
 # Release notes
 
+## 1.10.2 — 2026-10-18
+
+**For users**
+- One SSH attack no longer shows up two or three times in "Latest blocked / failed inbound" (sshd logs each attempt
+  as several lines in the same second).
+
 ## 1.10.1 — 2026-10-18
 
 **For users**

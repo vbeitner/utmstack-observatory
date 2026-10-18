@@ -161,9 +161,16 @@ class GeoMap(unittest.TestCase):
         lon = next(a for a in g["arcs"] if a["city"] == "London")
         self.assertEqual(lon["denied"], 0)                                      # a successful login is not blocked
         self.assertEqual((g["total"], g["denied"]), (3, 2))
-        self.assertEqual([x["ip"] for x in g["ticker"]], ["2.57.122.238", "2.57.122.238"])
+        self.assertEqual([x["ip"] for x in g["ticker"]], ["2.57.122.238", "2.57.122.238"])   # different seconds: both kept
         self.assertEqual(g["ticker"][0]["net"], "hosting")
         self.assertEqual(next(x for x in g["sites"] if x["id"] == "10.0.2.3")["name"], "truenas")
+
+    def test_same_attempt_logged_twice_shows_once(self):
+        hits = [{"_source": {"@timestamp": "2026-10-18T20:00:00Z", "dataSource": "10.0.2.3", "log": {"message": m}}}
+                for m in ("Invalid user x from 2.57.122.238 port 1", "Connection closed by invalid user x 2.57.122.238 port 1 [preauth]")]
+        self.s.os_call = lambda path, body=None, method="POST": {"hits": {"hits": hits}}
+        self.s.GEO.lookup = lambda ip: None
+        self.assertEqual(len(self.s.build_geo(60, "syslog")["ticker"]), 1)
 
     def test_syslog_ip_extraction_skips_private_addresses(self):
         self.assertEqual(self.s.syslog_ip("Connection closed by invalid user x 2.57.122.238 port 1 [preauth]"), "2.57.122.238")

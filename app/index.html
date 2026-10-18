@@ -286,7 +286,7 @@ details.ev .kvt{margin:4px 0 8px}
 .map-wrap .maplibregl-ctrl-attrib{font-size:10.5px}
 .netb{display:inline-block;margin-left:5px;padding:0 5px;border:1px solid currentColor;border-radius:3px;font-family:var(--mono);font-size:10.5px;line-height:15px;vertical-align:1px}
 .netb-vpn{color:#FFC857}.netb-tor{color:#C792EA}.netb-hosting{color:#8FB8D0}
-.tk-type{color:var(--muted);font-family:var(--mono);font-size:11px}
+.tk-type{color:var(--muted);font-family:var(--mono);font-size:11px;text-transform:capitalize}
 .map-zoom{position:absolute;right:12px;bottom:10px;z-index:3;display:flex;flex-direction:column;gap:4px}
 .map-zoom button{width:34px;height:34px;border:1px solid var(--border-strong);background:rgba(7,10,15,.85);color:var(--ink);font-family:var(--mono);font-size:18px;line-height:1;cursor:pointer}
 .map-zoom button:hover,.map-zoom button:focus-visible{border-color:var(--cyan);color:var(--cyan)}
@@ -1348,10 +1348,10 @@ body.paused .mark-core,body.paused .tk.new,body.paused .live-dot{animation-play-
     } catch(e){ return; }                              // no WebGL
     m.touchZoomRotate.disableRotation();
     m.addControl(new maplibregl.AttributionControl({compact: true}), 'top-right');
-    var attrib = mapWrap.querySelector('.maplibregl-ctrl-attrib');
-    if(attrib) attrib.classList.remove('maplibregl-compact-show');   // start folded to the (i) button
+    var foldCredit = function(){ var c = mapWrap.querySelector('.maplibregl-ctrl-attrib'); if(c) c.classList.remove('maplibregl-compact-show'); };
     m.on('load', function(){
       ready = true; BASE = m; mapWrap.classList.add('has-base'); mapTip.classList.remove('on'); drawMap(frameT());
+      setTimeout(foldCredit, 0);                       // MapLibre opens the compact credit on load; start folded to (i)
     });
     m.on('render', function(){ if(BASE && (m.isMoving() || !liveOn || reduceMotion)) drawMap(frameT()); });   // same frame as the map
     var tip = function(e){ if(BASE && !hoverPin) tipAt(e.point.x, e.point.y, mapCv.getBoundingClientRect()); };

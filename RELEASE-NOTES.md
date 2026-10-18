@@ -1,5 +1,11 @@
 # Release notes
 
+## 1.10.1 — 2026-10-18
+
+**For users**
+- The map credit (OpenFreeMap / OpenStreetMap) now starts folded into the (i) button instead of covering the top of
+  the map. Source names on blocked rows are capitalized.
+
 ## 1.10.0 — 2026-10-18
 
 **For users**

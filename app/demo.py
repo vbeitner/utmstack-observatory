@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Victor Beitner. All rights reserved. See LICENSE.
 """Demo mode (DEMO=1): a fictional organisation with realistic, fully synthetic SIEM data.
 
 Used for sales demos, screenshots and the user manual. Nothing here talks to OpenSearch or to the internet.

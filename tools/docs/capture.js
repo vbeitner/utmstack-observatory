@@ -1,3 +1,4 @@
+// Copyright (c) 2026 Victor Beitner. All rights reserved. See LICENSE.
 // Screenshots + feature clips of the Observatory demo for the user manual and sales material.
 // Usage: node capture.js <base-url> <out-dir> [shots|clips|all]
 const { chromium } = require('playwright');
@@ -81,6 +82,10 @@ async function shots(browser) {
   await page.click('#mapTypeSeg [data-type="syslog"]'); await sleep(3500);
   await shot(page, '06-map-syslog-attackers');
   await page.click('#mapTypeSeg [data-type="all"]'); await sleep(3000);
+  // attacker panel: open the newest blocked row (the ticker re-renders, so click it by script)
+  await page.evaluate(() => document.querySelector('#mapTicker .tk[data-lat]').click()); await sleep(4500);
+  await shot(page, '22-attacker'); await rects(page, '22-attacker', ['#digTitle', '#atk0', '#rep0']);
+  await closeAll(page);
 
   await screen(page, 'Overview');
   await page.locator('#top5Body [data-rule]').first().click(); await sleep(1800);

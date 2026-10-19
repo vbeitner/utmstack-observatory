@@ -1,5 +1,36 @@
 # Release notes
 
+## 1.21.0 — 2026-10-19
+
+**For users**
+- **Tailscale users are now seen individually.** Until now everyone reaching the dashboard over Tailscale appeared as
+  one address, so one person's wrong passwords could lock all of them out. **Re-run `sudo ./install.sh`** to get this.
+- **Professional reports.** Every page of the PDF report now carries the UTMStack Observatory logo at the top and
+  "© 2026 Victor Beitner · Confidential · Page n of N" at the bottom. The first page opens with four key figures and
+  **Key findings**: plain-language points such as SSH or RDP allowed in from the internet, high-severity alerts,
+  silent data sources or an OpenSearch status that is not green. The HTML report has the same design.
+- A flood of wrong passwords from many addresses now slows every failed attempt down, instead of letting it pass
+  quickly; nobody is locked out by someone else's attack.
+- The street map uses MapLibre 6.12, which closes a known security issue in the old version. It looks and works the same.
+- The support panel (click the logo) shows the copyright notice. All documentation was updated: user manual (with new
+  screenshots of the attacker panel, *Apply fix* and the report), feature tour (three new steps), security assessment
+  (no open findings), README and their PDFs, which now also carry the logo and copyright on every page.
+
+**Technical**
+- `install.sh` adds, where `tailscale0` exists, `/usr/local/sbin/utmstack-observatory-real-ip` and the systemd unit
+  `utmstack-observatory-real-ip` (`PartOf`/`WantedBy` `tailscaled.service`): one `nat POSTROUTING` rule, kept first,
+  exempting Tailscale-marked (`0x40000`) packets to container port 8765 on `docker_gwbridge` from Tailscale's
+  `ts-postrouting` masquerade. `--no-real-ip-rule` and `uninstall` remove it. OBS-11 closed.
+- `LOGIN_SURGE_PER_MIN` (default 30): above that many failures a minute from all addresses, failed logins wait 3 s.
+- MapLibre GL JS 4.7.1 → 6.12.0 (ES modules: `maplibre-loader.mjs` hands it to the classic script; the server stamps
+  `?v=<version>` into module imports and the worker URL; CSP `worker-src 'self' blob:`). Blank images for the two
+  icons the tile style references but does not ship. OBS-04 closed.
+- Reports: `ReportPDF` with header/footer on every page, `key_findings()`, summary tiles, styled tables;
+  `app/brand/` holds the logo. HTML report embeds the logo and repeats header/footer when printed.
+- `LICENSE` (proprietary, © 2026 Victor Beitner) with third-party notices; copyright line in every source file.
+- Tests: `tests/test_real_ip.py`, `tests/test_branding_and_hardening.py`. Docs tooling: `tools/docs/yellow_demo.py`
+  (screenshot of *Apply fix*), logo and copyright in the PDF builder.
+
 ## 1.20.0 — 2026-10-19
 
 **For users**

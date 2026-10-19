@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Victor Beitner. All rights reserved. See LICENSE.
 """Build docs/tour/index.html: a standalone click-through feature tour from tour-steps.json + the capture's rects.json.
 Usage: python3 build_tour.py <steps.json> <rects.json> <out.html> <version>"""
 import html
@@ -72,7 +73,7 @@ ol.notes span{color:var(--ink2);font-size:13.5px}
     <ol class="notes" id="notes"></ol>
     <div class="nav"><button id="prev">Back</button><button id="next" class="primary">Next</button></div>
     <div class="dots" id="dots"></div>
-    <div class="foot">All screens use the built-in demo mode: a fictional organisation and documentation-range IP addresses.</div>
+    <div class="foot">All screens use the built-in demo mode: a fictional organisation and documentation-range IP addresses.<br>© 2026 Victor Beitner. All rights reserved.</div>
   </aside>
 </div>
 <script>

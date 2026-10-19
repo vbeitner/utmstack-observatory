@@ -1,3 +1,4 @@
+// Copyright (c) 2026 Victor Beitner. All rights reserved. See LICENSE.
 /* UTMStack Observatory — pure layout arithmetic for the widget board (no DOM).
    Items are {type, x, y, w, h} on a 12-column grid; y/h are 40 px row units. Every function returns new
    objects and never mutates its arguments. Loaded in the browser as window.ObsLayout, in Node via require(). */

@@ -1,3 +1,4 @@
+// Copyright (c) 2026 Victor Beitner. All rights reserved. See LICENSE.
 (function(){
   'use strict';
   var $  = function(s,r){return (r||document).querySelector(s)};
@@ -738,7 +739,8 @@
     }
   }
   function initBase(){
-    if(!window.maplibregl) return;
+    // the map library is an ES module and loads after this script: wait for it (no module support: outline map stays)
+    if(!window.maplibregl){ window.addEventListener('maplibre-ready', initBase, {once: true}); return; }
     var t0 = Date.now();
     fetch('https://tiles.openfreemap.org/styles/dark', {credentials: 'omit', referrerPolicy: 'no-referrer'})
       .then(function(r){ if(!r.ok) throw new Error('HTTP '+r.status); return r.json(); })
@@ -760,6 +762,9 @@
     } catch(e){ return; }                              // no WebGL
     PENDING = m;
     m.touchZoomRotate.disableRotation();
+    m.on('styleimagemissing', function(e){                // the tile style names two icons it does not ship: blank them
+      if(!m.hasImage(e.id)) m.addImage(e.id, {width: 1, height: 1, data: new Uint8Array(4)});
+    });
     var credit = document.createElement('a');
     credit.className = 'map-credit'; credit.textContent = MAP_CREDIT;
     credit.href = 'https://www.openstreetmap.org/copyright'; credit.target = '_blank'; credit.rel = 'noopener noreferrer';
@@ -1792,7 +1797,8 @@
     }
     $('#supBody').innerHTML = card +
       '<div><h3 class="tl-title">System</h3><div class="sup-grid">'+rows.map(function(r){ return '<span class="k">'+r[0]+'</span><span class="v">'+esc(r[1])+'</span>'; }).join('')+'</div></div>'+
-      (i.host ? '<div class="drawer-foot"><button class="ghost-btn" id="copyDiag">Copy diagnostics</button><span class="hint" id="copyNote">Plain-text summary for a support request · no passwords, no client names</span></div>' : '');
+      (i.host ? '<div class="drawer-foot"><button class="ghost-btn" id="copyDiag">Copy diagnostics</button><span class="hint" id="copyNote">Plain-text summary for a support request · no passwords, no client names</span></div>' : '')+
+      '<div class="hint" style="margin-top:18px">UTMStack Observatory '+esc(i.version||'')+(i.copyright?' · '+esc(i.copyright):'')+'</div>';
     var b = $('#copyDiag');
     if(b) b.addEventListener('click', function(){
       copyText(diagText(i)).then(function(){ $('#copyNote').textContent = 'Copied — paste it into your email to support.'; },

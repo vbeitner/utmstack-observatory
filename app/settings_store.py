@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Victor Beitner. All rights reserved. See LICENSE.
 """Live-editable settings that would otherwise only be set via install.sh flags (no HTTP here).
 
 Stored as a flat JSON object of known keys -> string values, in the same raw format install.sh's

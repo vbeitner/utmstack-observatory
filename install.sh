@@ -16,6 +16,7 @@
 #          --support "Name|email|phone|url"   (shown when the logo is clicked)
 #          --abuseipdb-key KEY   --virustotal-key KEY   (live IP reputation on alert detail)
 #          --proxycheck-key KEY  --geoip-online-daily N   (online fallback for attacker IP location / VPN; default 100/day, 0 = off)
+#          --no-health-fix   (no "Apply fix" button in the SIEM-health panel; it shows the commands instead)
 #          --os-account reader|backend   (reader: dedicated read-only OpenSearch user, the default; backend: UTMStack's admin)
 set -euo pipefail
 
@@ -34,6 +35,11 @@ die()  { printf '\033[31merror:\033[0m %s\n' "$*" >&2; exit 1; }
 # user with a read-only role through the OpenSearch security REST API, using the backend's credentials once.
 READER_USER=observatory_reader; READER_ROLE=observatory_read
 READER_ROLE_BODY='{"description":"UTMStack Observatory: read-only (managed by install.sh)","cluster_permissions":["cluster:monitor/*"],"index_permissions":[{"index_patterns":["v11-*"],"allowed_actions":["read","view_index_metadata"]},{"index_patterns":["*"],"allowed_actions":["indices:monitor/*"]}]}'
+
+# A second, narrow account for the SIEM-health "Apply fix" button: it may only change index settings (the dashboard
+# sends nothing but number_of_replicas: 0), two plugin cluster settings and one index template. Reads stay read-only.
+FIXER_USER=observatory_fixer; FIXER_ROLE=observatory_health_fix
+FIXER_ROLE_BODY='{"description":"UTMStack Observatory: SIEM-health fix button (managed by install.sh)","cluster_permissions":["cluster:monitor/health","cluster:admin/settings/update","indices:admin/template/put"],"index_permissions":[{"index_patterns":["*",".*"],"allowed_actions":["indices:admin/settings/update"]}]}'
 
 # Runs a command inside the OpenSearch container (tests replace this to talk to a stub server).
 in_node1() { docker exec -i "$OSCID" "$@"; }
@@ -63,6 +69,7 @@ ensure_os_reader() {
     [ "$(os_code "$ES_USER" "$ES_PASS" GET "$a/health")" = 200 ] && { api="$a/api"; break; }
   done
   [ -n "$api" ] || { warn "the OpenSearch security REST API is not available (plugin disabled or too old); using the backend's administrator account"; return 0; }
+  OS_SEC_API="$api"
 
   code="$(os_code "$ES_USER" "$ES_PASS" PUT "$api/roles/$READER_ROLE" "$READER_ROLE_BODY")"
   case "$code" in 200|201) ;; *) warn "could not create the read-only OpenSearch role (HTTP $code); using the backend's administrator account"; return 0;; esac
@@ -88,6 +95,29 @@ ensure_os_reader() {
   info "OpenSearch: dashboard uses the read-only user $READER_USER (role $READER_ROLE)"
 }
 
+# Sets OS_FIX_RUN_USER / OS_FIX_RUN_PASS for the "Apply fix" button, or leaves them empty (button not offered;
+# the panel still shows the commands). Only needed when the dashboard itself reads with the read-only user.
+ensure_os_fixer() {
+  OS_FIX_RUN_USER=""; OS_FIX_RUN_PASS=""
+  local file="$CONF_DIR/os_fixer.pass" code pw
+  [ "${HEALTH_FIX:-1}" = 1 ] || { info "SIEM-health fix button off (--no-health-fix)"; return 0; }
+  [ "${OS_RUN_USER:-}" = "$READER_USER" ] && [ -n "${OS_SEC_API:-}" ] || return 0
+  code="$(os_code "$ES_USER" "$ES_PASS" PUT "$OS_SEC_API/roles/$FIXER_ROLE" "$FIXER_ROLE_BODY")"
+  case "$code" in 200|201) ;; *) warn "could not create the OpenSearch fix role (HTTP $code); the SIEM-health panel will show commands instead of a fix button"; return 0;; esac
+  if [ -s "$file" ]; then pw="$(cat "$file")"
+  else pw="$(head -c 48 /dev/urandom | base64 | tr -d '/+=\n' | cut -c1-28)-Aa9"; fi
+  ( umask 077; printf '%s' "$pw" > "$file" ); chmod 600 "$file"
+  code="$(os_code "$ES_USER" "$ES_PASS" PUT "$OS_SEC_API/internalusers/$FIXER_USER" \
+    "{\"password\":\"$pw\",\"opendistro_security_roles\":[\"$FIXER_ROLE\"],\"attributes\":{\"managed_by\":\"utmstack-observatory\"}}")"
+  case "$code" in 200|201) ;; *) warn "could not create the OpenSearch fix user (HTTP $code); no fix button"; return 0;; esac
+  for _ in 1 2 3; do
+    code="$(os_code "$FIXER_USER" "$pw" GET /_cluster/health)"; [ "$code" = 200 ] && break; sleep 2
+  done
+  [ "$code" = 200 ] || { warn "the OpenSearch fix user cannot log in (HTTP $code); no fix button"; return 0; }
+  OS_FIX_RUN_USER="$FIXER_USER"; OS_FIX_RUN_PASS="$pw"
+  info "OpenSearch: SIEM-health fix button uses $FIXER_USER (role $FIXER_ROLE: replica settings only)"
+}
+
 # Sourced by the tests for the functions above; nothing below runs then.
 [ "${BASH_SOURCE[0]}" = "$0" ] || return 0
 
@@ -99,7 +129,7 @@ case "${1:-}" in install|uninstall|status|logs|password) CMD="$1"; shift;; esac
 # defaults, overridden by the saved config from a previous install, then by flags
 PORT=8765; DASH_USER=admin; AI_HOSTS=""; TLS=0; TZ_NAME=""; STACK=""; SITES=""; HOME_LOC=""; SUPPORT=""
 DASH_USER_FLAG=0; ABUSEIPDB_FLAG=0; VIRUSTOTAL_FLAG=0
-TLS_CERT_SRC=""; TLS_KEY_SRC=""; NEW_PASS=""; IMPORT=""; PURGE=0; ABUSEIPDB_KEY=""; VIRUSTOTAL_KEY=""; PROXYCHECK_KEY=""; GEOIP_ONLINE_DAILY=100; OS_ACCOUNT=reader
+TLS_CERT_SRC=""; TLS_KEY_SRC=""; NEW_PASS=""; IMPORT=""; PURGE=0; ABUSEIPDB_KEY=""; VIRUSTOTAL_KEY=""; PROXYCHECK_KEY=""; GEOIP_ONLINE_DAILY=100; OS_ACCOUNT=reader; HEALTH_FIX=1
 [ -f "$CONF" ] || TLS=1                          # new installs: HTTPS with a self-signed certificate unless --no-tls
 # shellcheck disable=SC1090
 [ -f "$CONF" ] && . "$CONF"
@@ -117,6 +147,7 @@ while [ $# -gt 0 ]; do
     --support) SUPPORT="$2"; shift 2;;
     --abuseipdb-key) ABUSEIPDB_KEY="$2"; ABUSEIPDB_FLAG=1; shift 2;;  --virustotal-key) VIRUSTOTAL_KEY="$2"; VIRUSTOTAL_FLAG=1; shift 2;;
     --proxycheck-key) PROXYCHECK_KEY="$2"; shift 2;;  --geoip-online-daily) GEOIP_ONLINE_DAILY="$2"; shift 2;;
+    --no-health-fix) HEALTH_FIX=0; shift;;  --health-fix) HEALTH_FIX=1; shift;;
     --os-account) case "$2" in reader|backend) OS_ACCOUNT="$2";; *) die "--os-account: use reader or backend";; esac; shift 2;;
     --purge) PURGE=1; shift;;               -h|--help) sed -n '2,17p' "$0"; exit 0;;
     *) die "unknown option: $1";;
@@ -221,6 +252,7 @@ if [ "$TLS" = 1 ]; then
 fi
 
 ensure_os_reader
+ensure_os_fixer
 
 HOSTFS=""; for d in /utmstack/locks /utmstack/updates /utmstack; do [ -d "$d" ] && { HOSTFS="$d"; break; }; done
 
@@ -264,6 +296,10 @@ ENVS=(--env "OS_URL=$SCHEME://$ES_HOST:$ES_PORT" --env "DASH_USER=$DASH_USER" --
 if [ -n "$OS_RUN_USER" ]; then
   mksecret observatory_os_pass "$OS_RUN_PASS"; SECRETS+=(--secret "source=observatory_os_pass_$TS,target=os_pass,uid=10001,mode=0400")
   ENVS+=(--env "OS_USER=$OS_RUN_USER" --env "OS_PASS_FILE=/run/secrets/os_pass")
+fi
+if [ -n "${OS_FIX_RUN_USER:-}" ]; then
+  mksecret observatory_os_fix_pass "$OS_FIX_RUN_PASS"; SECRETS+=(--secret "source=observatory_os_fix_pass_$TS,target=os_fix_pass,uid=10001,mode=0400")
+  ENVS+=(--env "OS_FIX_USER=$OS_FIX_RUN_USER" --env "OS_FIX_PASS_FILE=/run/secrets/os_fix_pass")
 fi
 if [ "$TLS" = 1 ]; then
   mkfilesecret observatory_tls_cert "$CERT"; mkfilesecret observatory_tls_key "$KEY"
@@ -329,8 +365,8 @@ else
   [ "$auth" = 200 ] || warn "login check returned HTTP $auth"
 fi
 
-{ printf 'PORT=%q\nDASH_USER=%q\nAI_HOSTS=%q\nTLS=%q\nTZ_NAME=%q\nSTACK=%q\nSITES=%q\nHOME_LOC=%q\nSUPPORT=%q\nABUSEIPDB_KEY=%q\nVIRUSTOTAL_KEY=%q\nPROXYCHECK_KEY=%q\nGEOIP_ONLINE_DAILY=%q\nOS_ACCOUNT=%q\n' \
-    "$PORT" "$DASH_USER" "$AI_HOSTS" "$TLS" "$TZ_NAME" "$STACK" "$SITES" "$HOME_LOC" "$SUPPORT" "$ABUSEIPDB_KEY" "$VIRUSTOTAL_KEY" "$PROXYCHECK_KEY" "$GEOIP_ONLINE_DAILY" "$OS_ACCOUNT"
+{ printf 'PORT=%q\nDASH_USER=%q\nAI_HOSTS=%q\nTLS=%q\nTZ_NAME=%q\nSTACK=%q\nSITES=%q\nHOME_LOC=%q\nSUPPORT=%q\nABUSEIPDB_KEY=%q\nVIRUSTOTAL_KEY=%q\nPROXYCHECK_KEY=%q\nGEOIP_ONLINE_DAILY=%q\nOS_ACCOUNT=%q\nHEALTH_FIX=%q\n' \
+    "$PORT" "$DASH_USER" "$AI_HOSTS" "$TLS" "$TZ_NAME" "$STACK" "$SITES" "$HOME_LOC" "$SUPPORT" "$ABUSEIPDB_KEY" "$VIRUSTOTAL_KEY" "$PROXYCHECK_KEY" "$GEOIP_ONLINE_DAILY" "$OS_ACCOUNT" "$HEALTH_FIX"
   [ -n "$TLS_CERT_SRC" ] && printf 'TLS_CERT_SRC=%q\nTLS_KEY_SRC=%q\n' "$TLS_CERT_SRC" "$TLS_KEY_SRC"; } > "$CONF"; chmod 600 "$CONF"
 
 echo

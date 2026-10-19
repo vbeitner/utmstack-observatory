@@ -1,5 +1,25 @@
 # Release notes
 
+## 1.20.0 — 2026-10-19
+
+**For users**
+- **Apply fix button** in the SIEM-health panel (click the OpenSearch status badge). When OpenSearch is yellow because
+  of replica copies a one-server cluster can never place, enter your dashboard password and press **Apply fix**: the
+  dashboard makes the change, shows each step with ✓ or ✗, and the badge turns green. No data is deleted. The
+  copy-paste commands are still there under *Or fix it by hand*.
+- The fix also covers OpenSearch's own index-management history (the cause of today's yellow status), which kept
+  creating a new daily index with a replica.
+
+**Technical**
+- `POST /api/cluster/fix` (CSRF header + dashboard password, login lockout, `audit:` log line). The fix is re-derived
+  server-side from `api_cluster()`; `_fix_op_allowed()` admits only replica-0 index settings, the two plugin cluster
+  settings (`plugins.index_state_management.history.number_of_replicas`, `search.insights.top_queries.exporter.type`)
+  and the `single-node-no-replicas` legacy template.
+- `install.sh` creates OpenSearch user `observatory_fixer` with role `observatory_health_fix` (settings/template
+  updates only), password in `/etc/utmstack-observatory/os_fixer.pass`, secret `os_fix_pass`; `--no-health-fix` skips
+  it. `OS_FIX_USER` / `OS_FIX_PASS(_FILE)`; without them the button only appears when the main account can write.
+- Tests: `tests/test_health_fix.py`, fixer role and installer cases in `tests/test_os_reader.py`.
+
 ## 1.19.0 — 2026-10-19
 
 **For users**

@@ -1,6 +1,6 @@
 # UTMStack Observatory — User Manual
 
-Version 1.16.2 · October 2026
+Version 1.20.0 · October 2026
 
 UTMStack Observatory is a read-only operations dashboard for a UTMStack v11 SIEM. It sits next to UTMStack, reads
 its OpenSearch data, and turns it into one screen a security team, an IT manager or a NOC wall can understand at a
@@ -250,6 +250,15 @@ language: whether data is safe, which shards are unassigned and why, and the com
 | Yellow | All data is available, but some replica copies are missing. Common on single-node installs; usually not urgent. |
 | Red | Some data is not searchable. Act on the advice in the panel. |
 
+**Apply fix.** When the cause is one the dashboard knows how to fix safely (replica copies a one-server cluster can
+never place, and the plugins that keep asking for them), an **Apply fix** button appears under *Apply the fix*.
+Enter your dashboard password and press it. The dashboard re-checks the cluster, runs only those changes (no data
+is deleted) and lists each step with ✓ or ✗; the status badge turns green within a few seconds. A step on
+OpenSearch's protected security audit log can answer ✗ "protected index": that one needs the super-admin
+certificate, and the commands under *Or fix it by hand* still work for it. The button uses a separate, narrow
+OpenSearch account (`observatory_fixer`) that may only change replica settings; installs with
+`--no-health-fix` show only the commands.
+
 ## 9. Trends and history
 
 **Trends · 30 d** shows hourly history for the last 30 days (events, alerts and, if enabled, AI traffic), a
@@ -406,6 +415,7 @@ Options are remembered in `/etc/utmstack-observatory/config.env`; pass one again
 | `--virustotal-key KEY` | off | VirusTotal reputation lookups |
 | `--proxycheck-key KEY` | none | proxycheck.io key for the online location fallback |
 | `--geoip-online-daily N` | `100` | Daily cap on online lookups; `0` disables them |
+| `--no-health-fix` | button on | No *Apply fix* button in the SIEM-health panel (commands only) |
 | `--os-account reader\|backend` | `reader` | OpenSearch account for the dashboard: the read-only `observatory_reader`, or UTMStack's administrator |
 
 ### Environment variables

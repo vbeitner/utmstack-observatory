@@ -249,7 +249,7 @@ REQUIRED = {
     "/_cat/shards": [("cluster", "cluster:monitor/state"), ("all", "indices:monitor/stats")],
     "/_cat/indices": CAT_INDICES,
 }
-NOT_CALLED = {"/_template/"}          # only printed as a command for the administrator to run
+NOT_CALLED = {"/_template/", "/_cluster/settings"}   # writes: only the fix account sends them (see TestFixerRole)
 GROUPS = {"read": ["indices:data/read/*"],
           "view_index_metadata": ["indices:admin/get", "indices:admin/mappings/get", "indices:admin/aliases/get",
                                   "indices:monitor/settings/get", "indices:admin/resolve/index"]}
@@ -287,6 +287,63 @@ class TestRoleCoversQueries(unittest.TestCase):
             for kind, action in REQUIRED[key]:
                 for index in ("v11-alert-2026.10.19", ".hidden-index", "other-index"):
                     self.assertTrue(allowed(role, kind, action, index), "%s needs %s on %s" % (path, action, index))
+
+
+def fixer_role_body():
+    m = re.search(r"^FIXER_ROLE_BODY='(.*)'$", read(INSTALL), re.M)
+    return json.loads(m.group(1))
+
+
+class TestFixerRole(unittest.TestCase):
+    """The fix account may do exactly what the "Apply fix" button sends, and nothing that reads or deletes data."""
+    def test_covers_the_fix_requests_only(self):
+        role = fixer_role_body()
+        for kind, action, index in (("cluster", "cluster:admin/settings/update", None),
+                                    ("cluster", "indices:admin/template/put", None),
+                                    ("index", "indices:admin/settings/update", "v11-alert-2026.10.19"),
+                                    ("index", "indices:admin/settings/update", ".opendistro-ism-managed-index-history-2026.10.19")):
+            self.assertTrue(allowed(role, kind, action, index), action)
+        for kind, action, index in (("index", "indices:data/read/search", "v11-alert-x"), ("index", "indices:admin/delete", "v11-alert-x"),
+                                    ("index", "indices:data/write/index", "v11-alert-x"), ("cluster", "cluster:admin/opendistro/security/x", None),
+                                    ("cluster", "cluster:admin/snapshot/delete", None)):
+            self.assertFalse(allowed(role, kind, action, index), action)
+
+
+@unittest.skipUnless(shutil.which("bash") and shutil.which("curl"), "needs bash and curl")
+class TestOsFixer(unittest.TestCase):
+    def run_both(self, stub, conf_dir, health_fix="1"):
+        script = r'''
+source "$INSTALL"
+in_node1() { "$@"; }
+sleep() { :; }
+SCHEME=http ES_PORT="$PORT" CONF_DIR="$CONF_DIR_IN" ES_USER="$ES_USER_IN" ES_PASS="$ES_PASS_IN" OSCID=node1 OS_ACCOUNT=reader HEALTH_FIX="$HF"
+ensure_os_reader
+ensure_os_fixer
+printf 'RESULT_USER=%s\nRESULT_FIX=%s\nRESULT_FIXPW=%s\n' "$OS_RUN_USER" "$OS_FIX_RUN_USER" "$OS_FIX_RUN_PASS"
+'''
+        env = dict(os.environ, INSTALL=INSTALL, PORT=str(stub.port), CONF_DIR_IN=conf_dir, ES_USER_IN=ADMIN,
+                   ES_PASS_IN=ADMIN_PASS, HF=health_fix)
+        p = subprocess.run(["bash", "-c", script], env=env, capture_output=True, text=True, timeout=60)
+        self.assertEqual(p.returncode, 0, p.stderr)
+        return dict(line.split("=", 1) for line in p.stdout.splitlines() if line.startswith("RESULT_")), p.stderr
+
+    def test_creates_the_fix_user_next_to_the_reader(self):
+        d = tempfile.mkdtemp()
+        s = StubOpenSearch()
+        try:
+            r, err = self.run_both(s, d)
+            self.assertEqual(r["RESULT_USER"], "observatory_reader")
+            self.assertEqual(r["RESULT_FIX"], "observatory_fixer")
+            self.assertEqual(s.roles["observatory_health_fix"], fixer_role_body())
+            self.assertEqual(s.users["observatory_fixer"]["opendistro_security_roles"], ["observatory_health_fix"])
+            self.assertEqual(read(os.path.join(d, "os_fixer.pass")), r["RESULT_FIXPW"])
+            again, _ = self.run_both(s, d)
+            self.assertEqual(again["RESULT_FIXPW"], r["RESULT_FIXPW"])     # re-runs keep the password
+            off, _ = self.run_both(s, d, health_fix="0")
+            self.assertEqual(off["RESULT_FIX"], "")                   # --no-health-fix: no button, commands only
+        finally:
+            s.close()
+            shutil.rmtree(d, ignore_errors=True)
 
 
 if __name__ == "__main__":

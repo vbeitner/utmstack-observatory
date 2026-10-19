@@ -54,6 +54,7 @@ Common options:
 | `--support "Name\|email\|phone\|url"` | contact shown when the logo is clicked (default Cyber Security Canada, info@cybersecuritycanada.com) |
 | `--abuseipdb-key KEY` / `--virustotal-key KEY` | enable live IP-reputation lookups on alert detail (see Security) |
 | `--os-account reader\|backend` | OpenSearch account for the dashboard: the dedicated read-only user (default) or UTMStack's administrator |
+| `--no-health-fix` | no *Apply fix* button in the SIEM-health panel; it shows the commands only |
 
 Other commands: `sudo ./install.sh status | logs | password [NEW] | uninstall [--purge]`.
 `uninstall` keeps your stored history; `--purge` deletes it, the config and the image.

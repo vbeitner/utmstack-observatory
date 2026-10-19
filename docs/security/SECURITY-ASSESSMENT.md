@@ -92,6 +92,16 @@ The main residual risks are:
 Severity uses the CVSS 3.1 base metrics as a guide, adjusted for how the product is deployed: a monitoring view on
 a trusted network next to the SIEM, behind a login.
 
+**Addendum (1.20.0): SIEM-health "Apply fix" button.** On request, the dashboard can now apply the replica fix it
+already printed as commands. This adds one deliberate, narrow write path that keeps OBS-08's guarantees:
+- reads still use the read-only `observatory_reader`; the button alone uses a second account, `observatory_fixer`,
+  whose role allows only `indices:admin/settings/update`, `cluster:admin/settings/update`,
+  `indices:admin/template/put` and `cluster:monitor/health`, and cannot read, write or delete data;
+- the server re-derives the fix from the cluster's current state (never from the browser), and an allowlist admits
+  only `number_of_replicas: 0` on indices, two named plugin settings, and the `single-node-no-replicas` template;
+- the request needs the dashboard password (same lockout as logins) and the CSRF header, and is written to the audit log;
+- `install.sh --no-health-fix` leaves the account out entirely.
+
 ## 4. Findings summary
 
 | ID | Title | Severity | Status in 1.16.0 |

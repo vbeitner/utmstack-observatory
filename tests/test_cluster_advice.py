@@ -48,8 +48,8 @@ class ClusterAdvice(unittest.TestCase):
         self.assertNotIn("-u admin:'", joined)              # never on a command line, only via stdin
 
     def test_system_indices_are_in_their_own_step(self):
-        data, template = self.fix["steps"][0], self.fix["steps"][-1]
-        system = self.fix["steps"][1:-1]
+        data = self.fix["steps"][0]
+        system = [st for st in self.fix["steps"] if st["op"]["path"].endswith("/_settings?expand_wildcards=all")]
         self.assertIn("v11-alert-*", data["cmd"])
         self.assertNotIn(".opendistro", data["cmd"])
         # one request per system family: the security plugin refuses a whole request if any one index is protected

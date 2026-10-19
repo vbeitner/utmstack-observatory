@@ -1679,9 +1679,17 @@
         html += '<h3 class="tl-title">Why OpenSearch cannot place them <span class="panel-meta">allocation explain, e.g. '+esc(d.explained.index)+' shard '+esc(d.explained.shard)+'</span></h3>';
         html += '<div class="note-card"><b>'+esc(d.explained.text||'')+'</b>'+d.decider.map(function(x){ return '<br><span class="svc">'+esc(x.decider)+'</span> — '+esc(x.text); }).join('')+'</div>';
       }
+      if(d.fix && d.can_fix && d.fix.steps.some(function(st){ return st.op; })){
+        html += '<h3 class="tl-title">Apply the fix</h3><div class="note-card warn"><b>The dashboard can apply this fix for you.</b><br>'+
+          'The dashboard runs the steps below for you: it removes the replica copies a one-node cluster can never place and stops new '+
+          'indices from asking for one. No data is deleted. It re-checks the cluster first and only runs these exact changes.</div>'+
+          '<div class="fix-apply">'+(d.needs_password?'<input id="fixPw" type="password" maxlength="200" autocomplete="current-password" placeholder="Your dashboard password" aria-label="Dashboard password">':'')+
+          '<button class="ctl" id="fixApply" aria-pressed="true">Apply fix</button><span class="hint" id="fixNote"></span></div><div id="fixResults"></div>';
+      }
       if(d.fix){
-        html += '<h3 class="tl-title">How to fix it</h3><div class="note-card warn"><b>This dashboard is read-only and will not change your cluster.</b><br>'+
-          'If you want a green status, paste these commands one at a time into a terminal on the UTMStack server, as a user that can use sudo. '+
+        html += '<h3 class="tl-title">'+(d.can_fix?'Or fix it by hand':'How to fix it')+'</h3><div class="note-card warn">'+
+          (d.can_fix?'':'<b>This installation\'s OpenSearch account is read-only, so the dashboard cannot change your cluster.</b> Re-run the installer to add the fix account, or:<br>')+
+          'Paste these commands one at a time into a terminal on the UTMStack server, as a user that can use sudo. '+
           'Each one reads the OpenSearch password from UTMStack\'s backend service by itself (you never type it) and prints OpenSearch\'s answer: '+
           '<code>{"acknowledged":true}</code> means it worked. They remove the replica copies a one-node cluster can never place and stop new daily '+
           'indices from asking for one. No data is deleted.</div>'+
@@ -1692,6 +1700,29 @@
             d.fix.manual.map(esc).join(', ')+'. Check these indices by hand before changing them.</div>';
       }
       digBody.innerHTML = html;
+      var btn = $('#fixApply');
+      if(btn) btn.addEventListener('click', function(){
+        var note = $('#fixNote'), pw = $('#fixPw');
+        if(pw && !pw.value){ note.textContent = 'Enter your dashboard password first.'; note.style.color = '#FFC857'; pw.focus(); return; }
+        btn.disabled = true; note.textContent = 'Applying…'; note.style.color = '';
+        fetch('/api/cluster/fix', {method: 'POST', cache: 'no-store', headers: {'Content-Type': 'application/json', 'X-Observatory': '1'},
+                                   body: JSON.stringify({current_password: pw ? pw.value : ''})})
+          .then(function(r){ return r.json().then(function(j){ return {status: r.status, j: j}; }); })
+          .then(function(res){
+            if(!live()) return;
+            btn.disabled = false;
+            if(res.status !== 200){ note.textContent = res.j.error || ('Failed (HTTP '+res.status+')'); note.style.color = '#FF8A95'; return; }
+            var c = res.j.cluster || {}, rs = res.j.results || [];
+            note.textContent = 'OpenSearch is now '+String(c.status||'?').toUpperCase()+(c.unassigned?' · '+c.unassigned+' still unassigned':'');
+            note.style.color = c.status==='green' ? '#68F5B1' : '#FFC857';
+            $('#fixResults').innerHTML = rs.length ? '<table class="cmp"><tbody>'+rs.map(function(r){
+              return '<tr><td>'+esc(r.title)+'</td><td style="color:'+(r.ok?'#68F5B1':'#FF8A95')+'">'+(r.ok?'✓ done':'✗ '+esc(r.text))+'</td></tr>'; }).join('')+'</tbody></table>'
+              : '<div class="ai-note">Nothing left to fix.</div>';
+            if(c.status==='green') setTimeout(function(){ if(live()) renderDig(); }, 2500);   // redraw: the panel turns green
+            if(typeof refresh === 'function') refresh();
+          })
+          .catch(function(e){ if(live()){ btn.disabled = false; note.textContent = 'Failed: '+e.message; note.style.color = '#FF8A95'; } });
+      });
     }).catch(function(e){ if(live()) failed(e); });
   };
 

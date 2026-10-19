@@ -12,7 +12,7 @@ import urllib.error, urllib.request
 from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-VERSION = "1.19.0"
+VERSION = "1.20.0"
 HERE = os.path.dirname(os.path.abspath(__file__))
 if HERE not in sys.path:                          # the container runs "python3 -I", which leaves this folder off sys.path
     sys.path.insert(0, HERE)
@@ -36,6 +36,9 @@ def secret(name):
 
 OS_URL = env("OS_URL").rstrip("/")             # e.g. https://node1:9200 ; empty = docker-exec transport
 OS_USER, OS_PASS = env("OS_USER"), secret("OS_PASS")
+# Narrow write account for the SIEM-health "Apply fix" button only (index replica settings, cluster settings,
+# index templates); everything else reads with OS_USER. Unset = the button is offered only when OS_USER can write.
+OS_FIX_USER, OS_FIX_PASS = env("OS_FIX_USER"), secret("OS_FIX_PASS")
 DATA_DIR = env("DATA_DIR", HERE)
 DASH_USER, DASH_PASS = env("DASH_USER", "admin"), secret("DASH_PASS")        # install-time defaults;
 ABUSEIPDB_KEY = secret("ABUSEIPDB_KEY")        # current_*() below is what every request actually uses --
@@ -166,11 +169,12 @@ def _call_exec(path, body, method):
     return json.loads(r.stdout)
 
 
-def _call_http(path, body, method):
+def _call_http(path, body, method, creds=None):
     data = None if method == "GET" else json.dumps(body or {}).encode()
     req = urllib.request.Request(OS_URL + path, data=data, method=method, headers={"Content-Type": "application/json"})
-    if OS_USER:
-        req.add_header("Authorization", "Basic " + base64.b64encode(("%s:%s" % (OS_USER, OS_PASS)).encode()).decode())
+    user, pw = creds or (OS_USER, OS_PASS)
+    if user:
+        req.add_header("Authorization", "Basic " + base64.b64encode(("%s:%s" % (user, pw)).encode()).decode())
     try:
         with urllib.request.urlopen(req, timeout=25, context=_ctx) as r:
             return json.loads(r.read())
@@ -1152,29 +1156,94 @@ def api_cluster():
         series = [x for x in pats if x.endswith("-*")]
         fix = {"patterns": pats, "steps": [],
                "manual": [f["family"] for f in fam_rows if not SAFE_INDEX.fullmatch(f["family"])]}
+
+        def step(title, path, body):
+            # the same request twice: as a copy-paste command, and as the operation the "Apply fix" button runs
+            fix["steps"].append({"title": title, "cmd": opensearch_put_cmd(path, json.dumps(body, separators=(",", ":"))),
+                                 "op": {"method": "PUT", "path": path, "body": body}})
+        no_replica = {"index": {"number_of_replicas": 0}}
         if data:
-            fix["steps"].append({"title": "Remove replicas from the existing data indices",
-                                 "cmd": opensearch_put_cmd("/%s/_settings" % ",".join(data), '{"index":{"number_of_replicas":0}}')})
+            step("Remove replicas from the existing data indices", "/%s/_settings" % ",".join(data), no_replica)
         for fam in system:
             # One request per family: the security plugin refuses a whole request when any index in it is protected.
-            fix["steps"].append({"title": "Remove replicas from the system index %s" % fam,
-                                 "cmd": opensearch_put_cmd("/%s/_settings?expand_wildcards=all" % fam,
-                                                           '{"index":{"number_of_replicas":0}}')})
+            step("Remove replicas from the system index %s" % fam, "/%s/_settings?expand_wildcards=all" % fam, no_replica)
+        fams_un = {f["family"] for f in fam_rows}
+        # Plugins that create their daily indices with an explicit replica count ignore templates; their own setting
+        # is the only lasting fix (seen on UTMStack: index-management history, query insights).
+        if ".opendistro-ism-managed-index-history" in fams_un:
+            step("Stop OpenSearch's index-management history asking for a replica", "/_cluster/settings",
+                 {"persistent": {"plugins.index_state_management.history.number_of_replicas": 0}})
+        if "top_queries" in fams_un:
+            step("Stop the query-insights plugin writing daily indices (UTMStack does not use them)", "/_cluster/settings",
+                 {"persistent": {"search.insights.top_queries.exporter.type": "none"}})
         fix["protected_note"] = ("A system-index step that answers 403 'no permissions' means OpenSearch protects that index: "
                                  "the admin password is not enough, it needs the super-admin certificate (the admin_dn "
                                  "certificate in opensearch.yml). The other steps are not affected.")
         if series:
             # Legacy template with order 0: it only applies when no composable template matches, so if UTMStack's own
             # (composable) template is ever fixed to match its indices, UTMStack's settings and mappings win.
-            fix["steps"].append({"title": "Stop new daily indices getting a replica",
-                                 "cmd": opensearch_put_cmd("/_template/single-node-no-replicas",
-                                                           '{"index_patterns":[%s],"order":0,"settings":{"number_of_replicas":0}}'
-                                                           % ",".join('"%s"' % x for x in series))})
+            step("Stop new daily indices getting a replica", "/_template/single-node-no-replicas",
+                 {"index_patterns": series, "order": 0, "settings": {"number_of_replicas": 0}})
     return {"status": h["status"], "nodes": h.get("number_of_data_nodes"), "active_pct": h.get("active_shards_percent_as_number"),
             "active": h.get("active_shards"), "primaries": h.get("active_primary_shards"), "unassigned": len(un), "unassigned_primaries": len(un_p),
             "reasons": reasons, "families": fam_rows, "decider": decider,
             "explained": ({"index": ex.get("index"), "shard": ex.get("shard"), "primary": ex.get("primary"), "text": ex.get("allocate_explanation")} if ex else None),
-            "notes": notes, "fix": fix}
+            "notes": notes, "fix": fix, "can_fix": can_fix(), "needs_password": bool(current_dash_pass())}
+
+
+def can_fix():
+    """The button needs an account that may write: the dedicated fixer, the docker-exec admin, or (when the installer
+    kept UTMStack's admin account) OS_USER itself. Never the read-only observatory_reader."""
+    if DEMO:
+        return False
+    return bool(OS_FIX_USER) or TRANSPORT == "docker-exec" or (bool(OS_USER) and OS_USER != "observatory_reader") or not OS_USER
+
+
+FIX_OP_PATH = re.compile(r"/(_cluster/settings|_template/single-node-no-replicas|[a-z0-9._*,-]+/_settings(\?expand_wildcards=all)?)")
+FIX_SETTINGS = {"plugins.index_state_management.history.number_of_replicas", "search.insights.top_queries.exporter.type"}
+_fix_lock = threading.Lock()
+FIX_SETTLE_S = 1.5
+
+
+def _fix_op_allowed(op):
+    """Second line of defence: only the request shapes api_cluster() produces may ever be sent."""
+    path, body = op.get("path", ""), op.get("body") or {}
+    if op.get("method") != "PUT" or not FIX_OP_PATH.fullmatch(path):
+        return False
+    if path == "/_cluster/settings":
+        return set(body) == {"persistent"} and set(body["persistent"]) <= FIX_SETTINGS
+    if path.startswith("/_template/"):
+        return set(body) == {"index_patterns", "order", "settings"} and body["settings"] == {"number_of_replicas": 0}
+    return body == {"index": {"number_of_replicas": 0}}
+
+
+def apply_cluster_fix(who):
+    """Re-derive the fix from the cluster's current state (never from the browser) and run its steps."""
+    with _fix_lock:
+        before = api_cluster()
+        steps = [x for x in ((before.get("fix") or {}).get("steps") or []) if x.get("op")]
+        results = []
+        for st in steps:
+            op = st["op"]
+            if not _fix_op_allowed(op):
+                results.append({"title": st["title"], "ok": False, "text": "skipped: not an allowed change"})
+                continue
+            try:
+                if TRANSPORT == "docker-exec":
+                    res = _call_exec(op["path"], op["body"], "PUT")
+                else:
+                    res = _call_http(op["path"], op["body"], "PUT", (OS_FIX_USER, OS_FIX_PASS) if OS_FIX_USER else None)
+            except Exception as e:
+                res = {"error": str(e)}
+            ok = isinstance(res, dict) and res.get("acknowledged") is True
+            err = (res or {}).get("error") if isinstance(res, dict) else None
+            text = "done" if ok else str((err or {}).get("reason") if isinstance(err, dict) else err or res)[:240]
+            if not ok and "no permissions" in text:
+                text = "OpenSearch refused: this is a protected index (needs the super-admin certificate) or the fix account lacks the right"
+            results.append({"title": st["title"], "ok": ok, "text": text})
+        print("audit: cluster fix by %s: %s" % (who, "; ".join("%s=%s" % (r["title"], "ok" if r["ok"] else "failed") for r in results) or "nothing to do"), flush=True)
+    time.sleep(FIX_SETTLE_S)                     # let OpenSearch drop the replicas before re-reading the status
+    return {"results": results, "cluster": api_cluster()}
 
 
 SAFE_INDEX = re.compile(r"[a-z0-9._-]+")      # index names come from OpenSearch; only these ever reach a shell command
@@ -2241,11 +2310,33 @@ class Handler(BaseHTTPRequestHandler):
         except ValueError as e:
             self.send(400, "application/json", json.dumps({"error": str(e)[:200]}).encode())
 
+    def cluster_fix(self, raw):
+        if not can_fix():
+            self.send(409, "application/json", json.dumps({"error": "this installation's OpenSearch account is read-only; "
+                      "re-run install.sh to create the fix account, or use the commands shown"}).encode())
+            return
+        try:
+            req = json.loads(raw or b"{}")
+        except ValueError:
+            req = {}
+        cur = req.get("current_password", "") if isinstance(req, dict) else ""
+        if current_dash_pass():
+            ok, wait = login_attempt(self.client_address[0], lambda: isinstance(cur, str) and check_password(cur))
+            if not ok:
+                print("audit: cluster fix refused for %s (wrong current password)" % self.client_address[0], flush=True)
+                self.send(429 if wait else 403, "application/json", json.dumps(
+                    {"error": "too many wrong passwords, try again later" if wait else "enter your dashboard password to apply the fix"}).encode())
+                return
+        try:
+            self.send(200, "application/json", json.dumps(apply_cluster_fix(self.client_address[0])).encode())
+        except Exception as e:
+            self.send(500, "application/json", json.dumps(client_error("/api/cluster/fix", e)).encode())
+
     def do_POST(self):
         u = urlparse(self.path)
         if not self.gate():
             return
-        if u.path != "/api/reports/generate":
+        if u.path not in ("/api/reports/generate", "/api/cluster/fix"):
             self.send(404, "text/plain", b"not found")
             return
         try:
@@ -2256,9 +2347,12 @@ class Handler(BaseHTTPRequestHandler):
             self.send(400, "application/json", b'{"error":"request too large or missing length"}')
             self.close_connection = True
             return
-        self.rfile.read(n)                         # always consume the body, or a rejected request resets the socket
+        raw = self.rfile.read(n)                   # always consume the body, or a rejected request resets the socket
         if not layout_store.csrf_ok(self.headers):
             self.send(403, "application/json", b'{"error":"forbidden"}')
+            return
+        if u.path == "/api/cluster/fix":
+            self.cluster_fix(raw)
             return
         p = {k: v[0] for k, v in parse_qs(u.query).items()}
         try:

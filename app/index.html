@@ -284,6 +284,12 @@ details.ev .kvt{margin:4px 0 8px}
 #mapBase{position:absolute;inset:0}
 .map-wrap.has-base #mapCanvas{pointer-events:none}
 .map-wrap .maplibregl-ctrl-attrib{font-size:10.5px}
+.map-port{display:inline-flex;align-items:center;border:1px solid var(--border);border-radius:4px;overflow:hidden;height:34px}
+.map-port label{padding:0 8px 0 12px;font-family:var(--mono);font-size:12.5px;font-weight:600;color:var(--muted)}
+.map-port input{width:76px;height:32px;border:0;border-left:1px solid var(--border);background:transparent;color:var(--ink);font-family:var(--mono);font-size:13px;padding:0 8px}
+.map-port button{height:32px;padding:0 10px;border-left:1px solid var(--border);font-family:var(--mono);font-size:12.5px;color:var(--muted);cursor:pointer}
+.map-port button:hover,.map-port button:focus-visible{color:var(--cyan)}
+.map-port.on{border-color:var(--cyan)}.map-port.on label{color:var(--cyan)}
 .netb{display:inline-block;margin-left:5px;padding:0 5px;border:1px solid currentColor;border-radius:3px;font-family:var(--mono);font-size:10.5px;line-height:15px;vertical-align:1px}
 .netb-vpn{color:#FFD23F}.netb-tor{color:#B97CFF}.netb-hosting{color:#8FB8D0}
 .tk-type{color:var(--muted);font-family:var(--mono);font-size:11px;text-transform:capitalize}
@@ -470,6 +476,13 @@ body.paused .mark-core,body.paused .tk.new,body.paused .live-dot{animation-play-
         <div class="seg" id="mapOutSeg" role="group" aria-label="Allowed or denied traffic">
           <button data-out="all" aria-pressed="true">All</button><button data-out="allowed" aria-pressed="false">Allowed</button><button data-out="denied" aria-pressed="false">Denied</button>
         </div>
+        <div class="seg" id="mapNetSeg" role="group" aria-label="VPN, Tor or hosting traffic">
+          <button data-net="all" aria-pressed="true">Any network</button><button data-net="vpn" aria-pressed="false">VPN</button><button data-net="tor" aria-pressed="false">Tor</button><button data-net="hosting" aria-pressed="false">Hosting</button>
+        </div>
+        <form class="map-port" id="mapPortForm" role="search" aria-label="Filter by port">
+          <label for="mapPort">Port</label><input id="mapPort" type="number" min="1" max="65535" inputmode="numeric" placeholder="any">
+          <button type="submit">Show</button><button type="button" id="mapPortClear" aria-label="Clear port filter" title="Clear port filter">✕</button>
+        </form>
       </div>
       <div class="map-body">
         <div class="map-wrap" id="mapWrap">
@@ -1008,7 +1021,7 @@ body.paused .mark-core,body.paused .tk.new,body.paused .live-dot{animation-play-
   /* ---------- live firewall map ---------- */
   var mapCv = $('#mapCanvas'), mapTip = $('#mapTip'), mapWrap = $('#mapWrap');
   var LAND = null, G = null, mapWin = 60, mapAnon = false, mapHits = [], landCache = null, seenTicks = {};
-  var mapType = 'all', mapDir = 'all', mapOut = 'all';
+  var mapType = 'all', mapDir = 'all', mapOut = 'all', mapNet = 'all', mapPort = null;
   // types whose logs carry origin/target geolocation (keep in step with GEO_TYPES in server.py); the rest get a note
   var GEO_TYPES = {'all': true, 'firewall-sophos-xg': true, 'o365': true, 'google': true, 'linux': true, 'syslog': true, 'wineventlog': true};
   var NET_LABEL = {vpn: 'VPN', tor: 'Tor', hosting: 'Hosting'};
@@ -1066,6 +1079,11 @@ body.paused .mark-core,body.paused .tk.new,body.paused .live-dot{animation-play-
     var out = [];
     G.arcs.forEach(function(a){
       if(mapDir!=='all' && a.dir!==mapDir) return;
+      if(mapNet!=='all'){                             // keep only the VPN / Tor / hosting part of this route
+        var m = a[mapNet]||0; if(!m) return;
+        var b = Object.assign({}, a, {count:m, denied: Math.round(a.denied*m/a.count), vpn:0, tor:0, hosting:0});
+        b[mapNet] = m; a = b;
+      }
       if(mapOut==='all'){ out.push(a); return; }
       var n = mapOut==='denied' ? a.denied : a.count - a.denied;
       var k = a.count ? n/a.count : 0;                // VPN/hosting shares scale with the part kept
@@ -1076,7 +1094,7 @@ body.paused .mark-core,body.paused .tk.new,body.paused .live-dot{animation-play-
   }
   function dirCountries(){
     if(!G) return [];
-    if(mapDir==='all' && mapOut==='all') return G.countries;
+    if(mapDir==='all' && mapOut==='all' && mapNet==='all') return G.countries;
     var by = {};
     dirArcs().forEach(function(a){
       var c = by[a.cc] || (by[a.cc] = {cc:a.cc, country:a.country, count:0, denied:0, 'in':0, out:0});
@@ -1198,14 +1216,16 @@ body.paused .mark-core,body.paused .tk.new,body.paused .live-dot{animation-play-
     }).join('') : '<div class="map-note">No geolocated traffic in the last '+winLbl+'.</div>';
     var fresh = {};
     $('#mapTickerTitle').textContent = mapType==='firewall-sophos-xg' ? 'Latest blocked inbound' : 'Latest blocked / failed inbound';
-    $('#mapTicker').innerHTML = g.ticker.length ? g.ticker.slice(0,10).map(function(x){
+    var tk = mapNet==='all' ? g.ticker : g.ticker.filter(function(x){ return x.net===mapNet; });
+    $('#mapTicker').innerHTML = tk.length ? tk.slice(0,10).map(function(x){
       var key = x.t+x.ip, isNew = !seenTicks[key]; fresh[key] = 1;
       var where = [x.city, x.country].filter(Boolean).join(', ') || x.cc || '';
       var geo = x.lat!=null && x.lon!=null ? ' data-lat="'+x.lat+'" data-lon="'+x.lon+'" data-ip="'+esc(x.ip||'')+'" data-sub="'+esc(where+' → '+x.site)+'" tabindex="0" role="button" aria-label="Look up '+esc(x.ip||'')+'"' : '';
       return '<div class="tk'+(isNew && Object.keys(seenTicks).length ? ' new' : '')+'"'+geo+'><span class="t">'+hhmmss(new Date(x.t))+'</span>'+
         '<span class="w"><span class="ip">'+esc(x.ip)+'</span>'+netBadge(x.net)+' '+flag(x.cc)+' '+esc(where)+' → '+esc(x.site)+(x.port?' :'+esc(x.port):'')+
         (mapType==='all' && x.type ? ' <span class="tk-type">'+esc(MAP_TYPE_LABEL[x.type]||x.type)+'</span>' : '')+'</span></div>';
-    }).join('') : '<div class="map-note">No blocked inbound connections in the last '+winLbl+'.</div>';
+    }).join('') : '<div class="map-note">No blocked inbound connections'+(mapNet!=='all' ? ' from '+NET_LABEL[mapNet]+' addresses' : '')+
+                  (mapPort ? ' on port '+mapPort : '')+' in the last '+winLbl+'.</div>';
     seenTicks = fresh;
     var home = g.sites.filter(function(s){ return s.loc_source==='home'; });
     $('#mapNote').textContent = (g.anonymized ? 'Wall mode: firewall names hidden. ' : '') +
@@ -1213,7 +1233,7 @@ body.paused .mark-core,body.paused .tk.new,body.paused .live-dot{animation-play-
       (g.arcs_total > g.arcs.length ? 'Showing the busiest '+g.arcs.length+' of '+g.arcs_total+' routes. ' : '') +
       'Locations from UTMStack GeoIP and IP Geolocation by DB-IP (db-ip.com, CC BY 4.0); VPN/hosting ranges from X4BNet, Tor exits from the Tor Project. Private addresses are not mapped.' +
       (g.geoip && !g.geoip.db ? ' The location database is still downloading — attackers from Linux, Syslog and Windows appear once it is ready.' : '');
-    $('#mapMeta').textContent = 'Last '+winLbl+' · updated '+hhmmss(new Date(g.generated));
+    $('#mapMeta').textContent = 'Last '+winLbl+(mapPort ? ' · port '+mapPort : '')+' · updated '+hhmmss(new Date(g.generated));
     $('#mapSummary').textContent = nf0.format(g.per_min)+' firewall connections per minute, '+dr.toFixed(1)+'% denied. Top country: '+(countries[0] ? countries[0].country : 'none')+'.';
   }
   function showMapFallback(show){
@@ -1229,9 +1249,9 @@ body.paused .mark-core,body.paused .tk.new,body.paused .live-dot{animation-play-
   function pollGeo(){
     if(!GEO_TYPES[mapType]){ showMapFallback(true); return; }
     showMapFallback(false);
-    fetch('/api/geo?window='+mapWin+'&type='+encodeURIComponent(mapType)+(mapAnon?'&anon=1':''), {cache:'no-store'}).then(function(r){ return r.json(); }).then(function(g){
+    fetch('/api/geo?window='+mapWin+'&type='+encodeURIComponent(mapType)+(mapPort?'&port='+mapPort:'')+(mapAnon?'&anon=1':''), {cache:'no-store'}).then(function(r){ return r.json(); }).then(function(g){
       if(g.error){ $('#mapMeta').textContent = 'Map unavailable: '+g.error.slice(0,80); return; }
-      if(!!g.anonymized !== mapAnon || g.window_s !== mapWin || g.type !== mapType) return;   // stale answer after a toggle
+      if(!!g.anonymized !== mapAnon || g.window_s !== mapWin || g.type !== mapType || (g.port||null) !== mapPort) return;   // stale answer after a toggle
       if(!liveOn){ pendingG = g; return; }
       G = g; renderMapSide(); if(reduceMotion) drawMap(0);
     }).catch(function(e){ $('#mapMeta').textContent = 'Map unreachable ('+e.message+')'; });
@@ -1254,6 +1274,19 @@ body.paused .mark-core,body.paused .tk.new,body.paused .live-dot{animation-play-
     mapOut = b.dataset.out; $$('#mapOutSeg button').forEach(function(x){ x.setAttribute('aria-pressed', String(x===b)); });
     if(G){ renderMapSide(); drawMap(frameT()); }
   }); });
+  $$('#mapNetSeg button').forEach(function(b){ b.addEventListener('click', function(){
+    mapNet = b.dataset.net; $$('#mapNetSeg button').forEach(function(x){ x.setAttribute('aria-pressed', String(x===b)); });
+    if(G){ renderMapSide(); drawMap(frameT()); }
+  }); });
+  function setMapPort(v){
+    mapPort = v >= 1 && v <= 65535 ? v : null;
+    $('#mapPort').value = mapPort || ''; $('#mapPortForm').classList.toggle('on', !!mapPort);
+    G = null; seenTicks = {}; drawMap(frameT());
+    $('#mapMeta').textContent = mapPort ? 'Loading port '+mapPort+'…' : 'Loading…';
+    pollGeo();
+  }
+  $('#mapPortForm').addEventListener('submit', function(e){ e.preventDefault(); setMapPort(parseInt($('#mapPort').value, 10)); });
+  $('#mapPortClear').addEventListener('click', function(){ setMapPort(null); });
   $('#mapFallbackBtn').addEventListener('click', function(){ openDig({name:'sources', tab:'source', type:mapType}, true); });
   function tipAt(x, y, r){
     var best = null, bd = 1e9;

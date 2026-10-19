@@ -12,7 +12,7 @@ import urllib.error, urllib.request
 from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-VERSION = "1.13.0"
+VERSION = "1.14.0"
 HERE = os.path.dirname(os.path.abspath(__file__))
 if HERE not in sys.path:                          # the container runs "python3 -I", which leaves this folder off sys.path
     sys.path.insert(0, HERE)
@@ -1259,17 +1259,17 @@ def geo_scope(dtype):
     return "/v11-log-*/_search", {"terms": {"dataType.keyword": list(NET_TYPES)}}
 
 
-def empty_geo(window, dtype):
-    return {"window_s": window, "type": dtype, "generated": datetime.now(timezone.utc).isoformat(), "age_s": None,
+def empty_geo(window, dtype, port=None):
+    return {"window_s": window, "type": dtype, "port": port, "generated": datetime.now(timezone.utc).isoformat(), "age_s": None,
             "total": 0, "denied": 0, "failed": 0, "per_min": 0, "home": current_home(), "sites": [], "arcs": [],
             "arcs_total": 0, "countries": {}, "ticker": [], "_newest": None}
 
 
-def build_geo(window, dtype="all"):
-    g = build_net_geo(window, dtype) if dtype == "all" or dtype in NET_TYPES else empty_geo(window, dtype)
+def build_geo(window, dtype="all", port=None):
+    g = build_net_geo(window, dtype, port) if dtype == "all" or dtype in NET_TYPES else empty_geo(window, dtype, port)
     for t in ATTACK_TYPES if dtype == "all" else ([dtype] if dtype in ATTACK_TYPES else []):
         try:
-            add_attackers(g, window, t)
+            add_attackers(g, window, t, port)
         except Exception as e:                   # one source failing must not blank the map
             print("attacker geo (%s) failed: %s" % (t, str(e)[:200]), flush=True)
     for x in g["ticker"]:
@@ -1291,9 +1291,9 @@ def build_geo(window, dtype="all"):
     return g
 
 
-def build_net_geo(window, dtype):
+def build_net_geo(window, dtype, port=None):
     search, type_flt = geo_scope(dtype)
-    span = {"bool": {"filter": [rng("now-%ds" % window), type_flt]}}
+    span = {"bool": {"filter": [rng("now-%ds" % window), type_flt] + ([{"term": {"target.port": port}}] if port else [])}}
     has = lambda f: {"exists": {"field": f}}
     # firewalls only "deny"; for sign-in logs (M365, Google) a failed login is the blocked event
     blocked = ["denied"] if dtype == "firewall-sophos-xg" else ["denied", "failed"]
@@ -1314,7 +1314,7 @@ def build_net_geo(window, dtype):
                     "origin.geolocation.countryCode", "origin.geolocation.latitude", "origin.geolocation.longitude",
                     "target.port", "protocol", "dataSource", "dataType"]})
     if "aggregations" not in r:                  # no index for this type yet (e.g. Google not connected): empty map
-        return empty_geo(window, dtype)
+        return empty_geo(window, dtype, port)
     a = r["aggregations"]
     total = r["hits"]["total"]["value"]
     denied, failed = _outcomes(a["outcome"]["buckets"])
@@ -1362,7 +1362,7 @@ def build_net_geo(window, dtype):
                        "proto": s_.get("protocol"), "site": _q(s_.get("dataSource")), "type": s_.get("dataType"),
                        "lat": round(lat, 3) if lat is not None else None, "lon": round(lon, 3) if lon is not None else None})
 
-    out = empty_geo(window, dtype)
+    out = empty_geo(window, dtype, port)
     out.update(total=total, denied=denied, failed=failed, sites=sites, arcs=arcs, countries=countries, ticker=ticker,
                _newest=a["newest"].get("value"))
     return out
@@ -1384,14 +1384,16 @@ def syslog_ip(message):
     return None
 
 
-def attacker_rows(window, dtype):
+def attacker_rows(window, dtype, port=None):
     """-> (rows [{site, name, ip, count, blocked}], ticker candidates, newest ms) for one log type."""
     span = rng("now-%ds" % window)
     path = "/v11-log-%s*/_search" % dtype + IX
     rows, ticker, newest = {}, [], None
     if dtype == "syslog":
+        if port and port != 22:                  # syslog lines carry no service port; the SSH ones are port 22
+            return [], [], None
         r = os_call(path, {"size": 1000, "sort": [{"@timestamp": "desc"}],
-                           "_source": ["@timestamp", "log.message", "dataSource", "origin.host"],
+                           "_source": ["@timestamp", "log.message", "dataSource", "origin.host", "origin.process"],
                            "query": {"bool": {"filter": [span, {"term": {"dataType.keyword": "syslog"}}],
                                               "should": [{"match_phrase": {"log.message": p}} for p in SYSLOG_PHRASES],
                                               "minimum_should_match": 1}}})
@@ -1399,7 +1401,7 @@ def attacker_rows(window, dtype):
             s_ = h["_source"]
             msg = (s_.get("log") or {}).get("message") or ""
             ip = syslog_ip(msg)
-            if not ip:
+            if not ip or (port and not str((s_.get("origin") or {}).get("process") or "").startswith("sshd")):
                 continue
             site = _q(s_.get("dataSource")) or "syslog"
             bad = not msg.startswith("Accepted")
@@ -1415,7 +1417,8 @@ def attacker_rows(window, dtype):
             newest = datetime.fromisoformat(hits[0]["_source"]["@timestamp"].replace("Z", "+00:00")).timestamp() * 1000
         return list(rows.values()), ticker, newest
 
-    flt = [span, {"term": {"dataType.keyword": dtype}}, {"exists": {"field": "origin.ip"}}]
+    flt = [span, {"term": {"dataType.keyword": dtype}}, {"exists": {"field": "origin.ip"}}] + \
+        ([{"term": {"target.port": port}}] if port else [])
     q = {"bool": {"filter": flt}}
     if dtype == "o365":                          # the ones UTMStack already placed are on the map via build_net_geo
         q["bool"]["must_not"] = [{"exists": {"field": "origin.geolocation.latitude"}}]
@@ -1448,8 +1451,8 @@ def attacker_rows(window, dtype):
     return list(rows.values()), ticker, a["newest"].get("value")
 
 
-def add_attackers(g, window, dtype):
-    rows, ticker, newest = attacker_rows(window, dtype)
+def add_attackers(g, window, dtype, port=None):
+    rows, ticker, newest = attacker_rows(window, dtype, port)
     if newest and (not g["_newest"] or newest > g["_newest"]):
         g["_newest"] = newest
     by_id = {x["id"]: x for x in g["sites"]}
@@ -1506,14 +1509,17 @@ def anonymize(geo):
     return out
 
 
-def api_geo(window=60, anon=False, dtype="all"):
+def api_geo(window=60, anon=False, dtype="all", port=None):
     window = window if window in GEO_WINDOWS_S else 60
     dtype = dtype if dtype in GEO_TYPES else "all"
+    port = port if isinstance(port, int) and 1 <= port <= 65535 else None
     with _geo_lock:
-        hit = _geo_cache.get((window, dtype))
+        if len(_geo_cache) > 200:                # many different ports tried: drop the old answers
+            _geo_cache.clear()
+        hit = _geo_cache.get((window, dtype, port))
         if not hit or time.time() - hit[0] >= GEO_TTL_S:
-            hit = (time.time(), build_geo(window, dtype))
-            _geo_cache[(window, dtype)] = hit
+            hit = (time.time(), build_geo(window, dtype, port))
+            _geo_cache[(window, dtype, port)] = hit
     data = hit[1]                                # shared cache: never modify it in place
     if anon:
         return anonymize(data)
@@ -1759,7 +1765,8 @@ class Handler(BaseHTTPRequestHandler):
             "/api/settings": lambda: api_settings(),
             "/api/reports": lambda: {"reports": reports.list_reports(DATA_DIR), "report_hour": current_report_hour()},
             "/api/geo": lambda: api_geo(int(p["window"]) if p.get("window", "").isdigit() else 60,
-                                        p.get("anon") == "1", p.get("type", "all")),
+                                        p.get("anon") == "1", p.get("type", "all"),
+                                        int(p["port"]) if p.get("port", "").isdigit() else None),
         }
         if u.path == "/api/data":
             try:

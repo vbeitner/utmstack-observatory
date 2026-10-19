@@ -171,6 +171,22 @@ class GeoMap(unittest.TestCase):
         b = [{"key": ip, "doc_count": n} for ip, n in (("1.1.1.1", 5), ("2.2.2.2", 3), ("3.3.3.3", 7), ("4.4.4.4", 9))]
         self.assertEqual(self.s.net_counts(b), {"vpn": 5, "tor": 3, "hosting": 7})
 
+    def test_port_filters_every_query_and_bad_ports_are_ignored(self):
+        g = self.s.api_geo(60, dtype="firewall-sophos-xg", port=3389)
+        self.assertEqual(g["port"], 3389)
+        main = next(b for p, b in self.calls if "per_fw" in (b or {}).get("aggs", {}))
+        self.assertIn({"term": {"target.port": 3389}}, main["query"]["bool"]["filter"])
+        ticker = next(b for p, b in self.calls if "sort" in (b or {}))
+        self.assertIn({"term": {"target.port": 3389}}, ticker["query"]["bool"]["filter"][0]["bool"]["filter"])
+        self.assertIsNone(self.s.api_geo(60, dtype="firewall-sophos-xg", port=70000)["port"])
+
+    def test_syslog_counts_only_ssh_for_port_22_and_nothing_for_other_ports(self):
+        hits = [{"_source": {"@timestamp": "2026-10-18T20:00:00Z", "dataSource": "10.0.2.3", "origin": {"process": p},
+                             "log": {"message": "Failed password for x from 2.57.122.238 port 1"}}} for p in ("sshd-session", "sudo")]
+        self.s.os_call = lambda path, body=None, method="POST": {"hits": {"hits": hits}}
+        self.assertEqual(len(self.s.attacker_rows(60, "syslog", 22)[0]), 1)
+        self.assertEqual(self.s.attacker_rows(60, "syslog", 443), ([], [], None))
+
     def test_same_attempt_logged_twice_shows_once(self):
         hits = [{"_source": {"@timestamp": "2026-10-18T20:00:00Z", "dataSource": "10.0.2.3", "log": {"message": m}}}
                 for m in ("Invalid user x from 2.57.122.238 port 1", "Connection closed by invalid user x 2.57.122.238 port 1 [preauth]")]

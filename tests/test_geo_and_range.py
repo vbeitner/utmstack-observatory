@@ -280,7 +280,7 @@ class SupportInfo(unittest.TestCase):
 
     def test_wall_version_has_contact_and_version_only(self):
         s = load_server()
-        self.assertEqual(set(s.api_support(anon=True)), {"contact", "version", "installed"})
+        self.assertEqual(set(s.api_support(anon=True)), {"contact", "version", "installed", "copyright"})
 
     def test_full_version_never_contains_secrets(self):
         s = load_server(DASH_PASS="dash-secret-123", OS_PASS="os-secret-456")

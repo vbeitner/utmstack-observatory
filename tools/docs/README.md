@@ -22,4 +22,10 @@ python3 md2html.py ../../docs/manual/USER-MANUAL.md ../../docs/manual/.print.htm
 node pdf.js ../../docs/manual/.print.html ../../docs/manual/USER-MANUAL.pdf && rm ../../docs/manual/.print.html
 ```
 
-The print HTML must sit next to the Markdown file so its relative image paths resolve.
+The print HTML must sit next to the Markdown file so its relative image paths resolve. `pdf.js` puts the logo
+(`docs/media/brand/logo.png`) in every page header and the copyright in the footer.
+
+The *Apply fix* screenshot needs a yellow cluster: `python3 yellow_demo.py ../../app 8798` serves demo data with a fake
+yellow OpenSearch that the button can repair (sign in with `DEMO_PASS`, default `demo-password-1`).
+
+© 2026 Victor Beitner. All rights reserved.

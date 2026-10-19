@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Victor Beitner. All rights reserved. See LICENSE.
 """PDF/HTML security reports: pure rendering and storage, no HTTP and no OpenSearch here.
 
 server.py gathers the report content (reusing its own existing data_for()/build_geo()/api_storage())
@@ -18,6 +19,7 @@ Report dict shape (all keys optional -- a missing section is just skipped):
    "resources": {"cpu_pct","load1","cores","mem_pct","mem_used_gb","mem_total_gb","disk_pct","disk_used_gb","disk_total_gb"},
    "storage": {"disk_free","disk_total","days_left","avg_daily_total"}}
 """
+import base64
 import html
 import os
 import re
@@ -71,7 +73,7 @@ def _trend_svg(trend, w=860, h=110):
     bars = []
     for i, p in enumerate(trend):
         bar_h = (p["events"] / maxv) * (h - 20)
-        bars.append('<rect x="%.1f" y="%.1f" width="%.1f" height="%.1f" fill="#2c7a9e"/>' %
+        bars.append('<rect x="%.1f" y="%.1f" width="%.1f" height="%.1f" fill="#0a9fc4"/>' %
                     (i * bw + 0.5, h - 20 - bar_h, max(0.5, bw - 1), bar_h))
     return ('<svg viewBox="0 0 %d %d" width="100%%" height="%d" style="display:block;background:#fafafa">'
             % (w, h, h) + "".join(bars) +
@@ -116,13 +118,18 @@ def render_html(data):
     k = data.get("kpi") or {}
     sev = k.get("sev") or {}
     rows = []
+    tiles = "".join("<div class='tile' style='border-top-color:rgb%s'><div class='tl'>%s</div><div class='tv'>%s</div><div class='ts'>%s</div></div>"
+                    % (str(rgb), e(label), e(value), e(sub)) for label, value, sub, rgb in _summary_tiles(data))
+    rows.append("<div class='tiles'>%s</div>" % tiles)
+    rows.append("<h2>Key findings</h2><ul class='findings'>%s</ul>" % "".join(
+        "<li class='f-%s'>%s</li>" % (e(level), e(text)) for level, text in key_findings(data)))
     rows.append("<h2>Summary — last %s</h2>" % e(str(data.get("range_h", 24)) + "h"))
     rows.append(
         "<table class='kv'><tr><td>Events</td><td>%s</td></tr><tr><td>Alerts</td><td>%s</td></tr>"
         "<tr><td>Severity</td><td>High %s &middot; Medium %s &middot; Low %s</td></tr>"
         "<tr><td>Data sources online</td><td>%s / %s</td></tr>"
         "<tr><td>Ingest lag</td><td>%s</td></tr></table>"
-        % (e(str(k.get("events_24h", "–"))), e(str(k.get("alerts_24h", "–"))),
+        % (e(_n(k.get("events_24h", "–"))), e(_n(k.get("alerts_24h", "–"))),
            e(str(sev.get("High", 0))), e(str(sev.get("Medium", 0))), e(str(sev.get("Low", 0))),
            e(str(k.get("sources_online", "–"))), e(str(k.get("sources_total", "–"))),
            e("%.1fs" % k["lag_s"] if k.get("lag_s") is not None else "–")))
@@ -242,24 +249,50 @@ def render_html(data):
                      _fmt_bytes(store.get("avg_daily_total")),
                      ("%.0f" % store["days_left"]) if store.get("days_left") else "–"))
 
-    return """<!doctype html><html><head><meta charset="utf-8"><title>UTMStack Observatory report</title>
+    logo = ""
+    if os.path.exists(LOGO_PNG):
+        with open(LOGO_PNG, "rb") as f:
+            logo = "<img class='logo' alt='UTMStack Observatory' src='data:image/png;base64,%s'>" % base64.b64encode(f.read()).decode()
+    return """<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>UTMStack Observatory - Security Operations Report</title>
 <style>
-body{font:14px/1.5 -apple-system,Segoe UI,Arial,sans-serif;color:#1a1a1a;background:#fff;max-width:900px;margin:40px auto;padding:0 20px}
-h1{font-size:22px;margin-bottom:0} .sub{color:#666;margin-top:4px}
-h2{font-size:16px;border-bottom:2px solid #1a1a1a;padding-bottom:4px;margin-top:32px} h3{font-size:14px;margin:18px 0 4px}
-table{border-collapse:collapse;width:100%%;margin:10px 0 20px}
-table.kv td:first-child{color:#555;width:260px}
-th,td{border:1px solid #ddd;padding:6px 10px;text-align:left;font-size:13px}
-th{background:#f3f3f3}
+:root{--navy:#0E1A26;--accent:#0A9FC4;--muted:#5B7083;--line:#D6E0E8;--zebra:#F4F7FA}
+*{box-sizing:border-box}
+body{font:14px/1.55 -apple-system,"Segoe UI",Helvetica,Arial,sans-serif;color:#1a2633;background:#fff;max-width:960px;margin:0 auto;padding:0 24px 40px}
+header.top{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:18px 0 12px;border-bottom:3px solid var(--accent)}
+.logo{height:44px}
+.meta{text-align:right;color:var(--muted);font-size:12px}
+h1{font-size:26px;color:var(--navy);margin:22px 0 2px} .sub{color:var(--muted);margin:0 0 18px}
+h2{font-size:17px;color:var(--navy);margin:30px 0 8px;padding-left:10px;border-left:4px solid var(--accent)}
+h3{font-size:14.5px;color:var(--navy);margin:18px 0 6px}
+.tiles{display:grid;grid-template-columns:repeat(4,1fr);gap:10px}
+.tile{background:var(--zebra);border-top:4px solid var(--accent);padding:10px 12px}
+.tl{font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted)} .tv{font-size:24px;font-weight:700;color:var(--navy)} .ts{font-size:11.5px;color:var(--muted)}
+ul.findings{list-style:none;padding:0;margin:0} ul.findings li{padding:7px 10px 7px 26px;position:relative;border-bottom:1px solid var(--line)}
+ul.findings li:before{content:"";position:absolute;left:8px;top:14px;width:9px;height:9px;border-radius:2px;background:var(--accent)}
+li.f-bad:before{background:#c0392b} li.f-warn:before{background:#b8860b} li.f-ok:before{background:#22b573}
+table{border-collapse:collapse;width:100%%;margin:8px 0 18px;font-size:13px}
+th{background:var(--navy);color:#fff;text-align:left;font-weight:600;padding:7px 10px}
+td{padding:6px 10px;border-bottom:1px solid var(--line);vertical-align:top} tr:nth-child(even) td{background:var(--zebra)}
+table.kv td:first-child{color:var(--muted);width:280px}
 .sev-high,.sev-critical{color:#c0392b;font-weight:600} .sev-medium{color:#b8860b;font-weight:600} .sev-low{color:#2d6a4f}
 .warn{color:#b8860b} .caption{color:#888;font-size:11px;margin-top:-14px}
-.foot{color:#999;font-size:11px;margin-top:40px;border-top:1px solid #eee;padding-top:10px}
+footer.foot{display:flex;justify-content:space-between;gap:12px;color:var(--muted);font-size:11.5px;margin-top:40px;border-top:1px solid var(--line);padding-top:10px}
+@media (max-width:700px){.tiles{grid-template-columns:repeat(2,1fr)} .meta{display:none}}
+@media print{body{max-width:none;padding:0 0 60px} header.top{position:fixed;top:0;left:0;right:0;background:#fff}
+  footer.foot{position:fixed;bottom:0;left:0;right:0;background:#fff;margin:0} main{margin-top:80px}
+  h2,h3{break-after:avoid} tr{break-inside:avoid} @page{margin:14mm 12mm}}
 </style></head><body>
-<h1>UTMStack Observatory — Security Report</h1>
-<div class="sub">%s &middot; generated %s</div>
+<header class="top">%s<div class="meta">Security Operations Report<br>%s &middot; %s</div></header>
+<main>
+<h1>Security Operations Report</h1>
+<p class="sub">Last %s hours &middot; generated %s</p>
 %s
-<div class="foot">Generated automatically from UTMStack's own OpenSearch data. Summary counts only — see the dashboard for detail.</div>
-</body></html>""" % (e(data.get("host") or ""), e(_fmt_dt(data.get("generated_at"))), "".join(rows))
+<p class="caption" style="margin-top:28px">Generated automatically by UTMStack Observatory from the SIEM's own data. Counts and aggregates only &mdash; see the dashboard for detail.</p>
+</main>
+<footer class="foot"><span>%s &middot; Confidential</span><span>UTMStack Observatory</span></footer>
+</body></html>""" % (logo, e(data.get("host") or ""), e(_fmt_dt(data.get("generated_at"))), e(str(data.get("range_h", 24))),
+                       e(_fmt_dt(data.get("generated_at"))), "".join(rows), e(copyright_line(data)))
 
 
 def _trend_chart(pdf, trend, width=180, height=28):
@@ -268,7 +301,7 @@ def _trend_chart(pdf, trend, width=180, height=28):
     x0, y0 = pdf.get_x(), pdf.get_y()
     n = len(trend)
     bw = width / n
-    pdf.set_fill_color(44, 122, 158)
+    pdf.set_fill_color(*ACCENT)
     for i, p in enumerate(trend):
         bar_h = (p["events"] / maxv) * height
         pdf.rect(x0 + i * bw, y0 + height - bar_h, max(0.3, bw - 0.3), bar_h, style="F")
@@ -286,178 +319,312 @@ def _trend_chart(pdf, trend, width=180, height=28):
     pdf.set_xy(x0, y0 + height + 7)
 
 
+# --------------------------------------------------------------------------------------- branding
+HERE = os.path.dirname(os.path.abspath(__file__))
+LOGO_PNG = os.path.join(HERE, "brand", "report-logo.png")
+COPYRIGHT_HOLDER = "Victor Beitner"
+NAVY, ACCENT, MUTED, ZEBRA, LINE = (14, 26, 38), (10, 159, 196), (91, 112, 131), (244, 247, 250), (214, 224, 232)
+RISKY_PORTS = {22: "SSH", 23: "Telnet", 445: "SMB", 1433: "MS SQL", 3306: "MySQL", 3389: "RDP", 5900: "VNC", 5432: "PostgreSQL"}
+
+
+def copyright_line(data):
+    year = (data.get("generated_at") or datetime.now(timezone.utc).isoformat())[:4]
+    return "© %s %s. All rights reserved." % (year, COPYRIGHT_HOLDER)
+
+
+def key_findings(data):
+    """Up to six plain-language points a manager should read first: (level, text), level in bad/warn/info/ok."""
+    out = []
+    k, con, cl = data.get("kpi") or {}, data.get("connections") or {}, data.get("cluster") or {}
+    if cl.get("status") and cl["status"] != "green":
+        out.append(("bad" if cl["status"] == "red" else "warn",
+                    "OpenSearch is %s with %s unassigned shard(s). Open the SIEM-health panel (status badge) to see why and "
+                    "apply the fix." % (cl["status"].upper(), cl.get("unassigned", "?"))))
+    if k.get("sources_stale"):
+        out.append(("warn", "%d data source(s) sent nothing in the last 10 minutes: %s."
+                    % (len(k["sources_stale"]), ", ".join(k["sources_stale"][:5]))))
+    high = (k.get("sev") or {}).get("High", 0)
+    if high:
+        out.append(("bad", "%s high-severity alert(s) in the period: review them in the dashboard's alert list." % high))
+    exposed = [x for x in con.get("allowed_inbound") or [] if any(p in RISKY_PORTS for p in x.get("ports") or [])]
+    for x in exposed[:2]:
+        names = ", ".join("%s (%s)" % (RISKY_PORTS[p], p) for p in x["ports"] if p in RISKY_PORTS)
+        out.append(("warn", "Allowed in from the internet on %s: %s%s reached %s %s times. Check that this service "
+                    "should be reachable from outside." % (names, x["ip"], " (%s)" % x["country"] if x.get("country") else "",
+                                                           x.get("site") or "a site", _n(x["count"]))))
+    if con.get("denied_ports"):
+        top = con["denied_ports"][0]
+        out.append(("info", "%s inbound attempts from %s addresses were blocked; the most-tried port was %s."
+                    % (_n(con.get("denied_inbound")), _n(con.get("attackers")), _port_label(top["port"], top.get("proto")))))
+    if con.get("top_attackers"):
+        a = con["top_attackers"][0]
+        out.append(("info", "Busiest attacker: %s%s, %s blocked attempts on %s." % (
+            a["ip"], " (%s%s)" % (a.get("country") or "", ", " + _net(a["net"]) if a.get("net") else "") if a.get("country") else "",
+            _n(a["count"]), _ports(a.get("ports")))))
+    if not out:
+        out.append(("ok", "No issues stood out in this period."))
+    return out[:6]
+
+
 # --------------------------------------------------------------------------------------- PDF
 def _latin(text):
     """fpdf's core fonts are Latin-1: keep accents, replace anything else (e.g. Türkiye stays, emoji go)."""
-    return text.encode("latin-1", "replace").decode("latin-1")
+    return str(text).replace("—", "-").replace("–", "-").replace("→", "->").replace("…", "...") \
+        .encode("latin-1", "replace").decode("latin-1")
+
+
+class ReportPDF(FPDF):
+    def __init__(self, data):
+        super().__init__()
+        self.data = data
+        self.set_margins(15, 26, 15)
+        self.set_auto_page_break(True, 18)
+        self.alias_nb_pages()
+
+    def header(self):
+        if os.path.exists(LOGO_PNG):
+            self.image(LOGO_PNG, x=15, y=8, h=9)
+        self.set_font("helvetica", "", 8)
+        self.set_text_color(*MUTED)
+        self.set_xy(110, 9)
+        self.cell(85, 4, _latin("Security Operations Report"), align="R")
+        self.set_xy(110, 13)
+        host = self.data.get("host") or ""
+        self.cell(85, 4, _latin("%s%s%s" % (host, "  |  " if host else "", _fmt_dt(self.data.get("generated_at")))), align="R")
+        self.set_draw_color(*ACCENT)
+        self.set_line_width(0.6)
+        self.line(15, 20, 195, 20)
+        self.set_line_width(0.2)
+        self.set_text_color(0, 0, 0)
+        self.set_xy(15, 26)
+
+    def footer(self):
+        self.set_y(-12)
+        self.set_draw_color(*LINE)
+        self.line(15, self.get_y() - 1, 195, self.get_y() - 1)
+        self.set_font("helvetica", "", 7.5)
+        self.set_text_color(*MUTED)
+        self.cell(120, 5, _latin(copyright_line(self.data) + "  |  Confidential"))
+        self.cell(60, 5, "Page %s of {nb}" % self.page_no(), align="R")
+        self.set_text_color(0, 0, 0)
+
+
+def _h2(pdf, text):
+    if pdf.get_y() > 245:
+        pdf.add_page()
+    pdf.ln(3)
+    pdf.set_fill_color(*ACCENT)
+    pdf.rect(15, pdf.get_y() + 1, 1.6, 6, style="F")
+    pdf.set_x(19)
+    pdf.set_font("helvetica", "B", 13)
+    pdf.set_text_color(*NAVY)
+    pdf.cell(0, 8, _latin(text), new_x="LMARGIN", new_y="NEXT")
+    pdf.set_text_color(0, 0, 0)
+    pdf.set_fill_color(255, 255, 255)
+    pdf.set_font("helvetica", "", 9.5)
+    pdf.ln(1)
+
+
+def _h3(pdf, text):
+    if pdf.get_y() > 250:
+        pdf.add_page()
+    pdf.ln(1.5)
+    pdf.set_font("helvetica", "B", 10.5)
+    pdf.set_text_color(*NAVY)
+    pdf.cell(0, 6.5, _latin(text), new_x="LMARGIN", new_y="NEXT")
+    pdf.set_text_color(0, 0, 0)
+    pdf.set_font("helvetica", "", 9)
+
+
+def _table(pdf, widths, head, rows, align=None, font=8.5):
+    pdf.set_font("helvetica", "", font)
+    pdf.set_draw_color(*LINE)
+    pdf.set_fill_color(*ZEBRA)                   # fpdf fills alternate rows with the current colour
+    heading = FontFace(emphasis="B", color=(255, 255, 255), fill_color=NAVY)
+    with pdf.table(col_widths=widths, text_align=align or "LEFT", headings_style=heading, line_height=font * 0.55,
+                   cell_fill_color=ZEBRA, cell_fill_mode="ROWS", borders_layout="HORIZONTAL_LINES") as t:
+        r = t.row()
+        for c in head:
+            r.cell(_latin(c))
+        for line in rows:
+            r = t.row()
+            for c in line:
+                r.cell(_latin(c))
+    pdf.set_font("helvetica", "", 9.5)
+    pdf.set_fill_color(255, 255, 255)
+    pdf.ln(2)
+
+
+def _kv(pdf, rows):
+    _table(pdf, (70, 110), ("Item", "Value"), rows)
+
+
+def _tiles(pdf, tiles):
+    """Four key figures in a row: (label, value, sub, rgb)."""
+    w, gap, y = 43, 2.67, pdf.get_y()
+    for i, (label, value, sub, rgb) in enumerate(tiles):
+        x = 15 + i * (w + gap)
+        pdf.set_fill_color(*ZEBRA)
+        pdf.rect(x, y, w, 22, style="F")
+        pdf.set_fill_color(*rgb)
+        pdf.rect(x, y, w, 1.2, style="F")
+        pdf.set_xy(x + 3, y + 3)
+        pdf.set_font("helvetica", "", 7)
+        pdf.set_text_color(*MUTED)
+        pdf.cell(w - 6, 4, _latin(label.upper()))
+        pdf.set_xy(x + 3, y + 7.5)
+        pdf.set_font("helvetica", "B", 15)
+        pdf.set_text_color(*NAVY)
+        pdf.cell(w - 6, 7, _latin(value))
+        pdf.set_xy(x + 3, y + 15.5)
+        pdf.set_font("helvetica", "", 7)
+        pdf.set_text_color(*MUTED)
+        pdf.cell(w - 6, 4, _latin(sub))
+    pdf.set_text_color(0, 0, 0)
+    pdf.set_fill_color(255, 255, 255)
+    pdf.set_xy(15, y + 26)
+
+
+LEVEL_RGB = {"bad": (192, 57, 43), "warn": (184, 134, 11), "info": ACCENT, "ok": (34, 181, 115)}
+
+
+def _summary_tiles(data):
+    k, con = data.get("kpi") or {}, data.get("connections") or {}
+    sev = k.get("sev") or {}
+    return [("Events", _n(k.get("events_24h")), "stored in the period", ACCENT),
+            ("Alerts", _n(k.get("alerts_24h")), "High %s  Medium %s  Low %s" % (sev.get("High", 0), sev.get("Medium", 0), sev.get("Low", 0)),
+             (192, 57, 43) if sev.get("High") else (184, 134, 11)),
+            ("Data sources", "%s / %s" % (k.get("sources_online", "-"), k.get("sources_total", "-")), "reporting in the last 10 min",
+             (184, 134, 11) if k.get("sources_stale") else (34, 181, 115)),
+            ("Blocked attempts", _n(con.get("denied_inbound")) if con else "-",
+             "from %s addresses" % _n(con.get("attackers")) if con else "inbound, denied", NAVY)]
 
 
 def render_pdf(data):
-    pdf = FPDF()
-    pdf.set_margin(15)
+    pdf = ReportPDF(data)
     pdf.add_page()
-    pdf.set_font("helvetica", "B", 18)
-    pdf.cell(0, 10, "UTMStack Observatory - Security Report", new_x="LMARGIN", new_y="NEXT")
+    pdf.set_font("helvetica", "B", 20)
+    pdf.set_text_color(*NAVY)
+    pdf.cell(0, 10, "Security Operations Report", new_x="LMARGIN", new_y="NEXT")
     pdf.set_font("helvetica", "", 10)
-    pdf.set_text_color(90, 90, 90)
-    host = data.get("host") or ""
-    pdf.cell(0, 6, "%s%sgenerated %s" % (host, " - " if host else "", _fmt_dt(data.get("generated_at"))),
+    pdf.set_text_color(*MUTED)
+    rh = data.get("range_h", 24)
+    pdf.cell(0, 6, _latin("Last %s hours  |  generated %s  |  %s" % (rh, _fmt_dt(data.get("generated_at")), data.get("host") or "")),
              new_x="LMARGIN", new_y="NEXT")
     pdf.set_text_color(0, 0, 0)
+    pdf.ln(3)
+    _tiles(pdf, _summary_tiles(data))
 
-    def h2(text):
-        pdf.ln(4)
-        pdf.set_font("helvetica", "B", 13)
-        pdf.cell(0, 8, text, new_x="LMARGIN", new_y="NEXT")
-        pdf.set_draw_color(20, 20, 20)
-        pdf.line(pdf.l_margin, pdf.get_y(), pdf.w - pdf.r_margin, pdf.get_y())
-        pdf.ln(2)
-        pdf.set_font("helvetica", "", 10)
-
-    def kv_table(rows):
-        head = FontFace(emphasis="B", fill_color=(243, 243, 243))
-        with pdf.table(col_widths=(70, 120), text_align="LEFT", first_row_as_headings=False, headings_style=head) as t:
-            for label, value in rows:
-                r = t.row()
-                r.cell(label)
-                r.cell(str(value))
+    _h2(pdf, "Key findings")
+    for level, text in key_findings(data):
+        y = pdf.get_y()
+        pdf.set_fill_color(*LEVEL_RGB.get(level, ACCENT))
+        pdf.rect(15, y + 1.3, 2.2, 2.2, style="F")
+        pdf.set_x(20)
+        pdf.set_font("helvetica", "", 9.5)
+        pdf.multi_cell(175, 5, _latin(text), new_x="LMARGIN", new_y="NEXT")
+        pdf.ln(0.8)
+    pdf.set_fill_color(255, 255, 255)
 
     k = data.get("kpi") or {}
     sev = k.get("sev") or {}
-    h2("Summary - last %sh" % data.get("range_h", 24))
-    kv_table([
-        ("Events", k.get("events_24h", "-")), ("Alerts", k.get("alerts_24h", "-")),
-        ("Severity", "High %s | Medium %s | Low %s" % (sev.get("High", 0), sev.get("Medium", 0), sev.get("Low", 0))),
-        ("Data sources online", "%s / %s" % (k.get("sources_online", "-"), k.get("sources_total", "-"))),
-        ("Ingest lag", ("%.1fs" % k["lag_s"]) if k.get("lag_s") is not None else "-"),
-    ])
+    _h2(pdf, "Summary")
+    _kv(pdf, [("Events", _n(k.get("events_24h"))), ("Alerts", _n(k.get("alerts_24h"))),
+              ("Severity", "High %s  |  Medium %s  |  Low %s" % (sev.get("High", 0), sev.get("Medium", 0), sev.get("Low", 0))),
+              ("Data sources online", "%s / %s" % (k.get("sources_online", "-"), k.get("sources_total", "-"))),
+              ("Ingest lag", ("%.1f s" % k["lag_s"]) if k.get("lag_s") is not None else "-")])
     if k.get("sources_stale"):
         pdf.set_text_color(150, 100, 0)
-        pdf.multi_cell(0, 6, "Silent sources (no data in 10 min): " + ", ".join(k["sources_stale"]))
+        pdf.multi_cell(0, 5, _latin("Silent sources (no data in 10 min): " + ", ".join(k["sources_stale"])))
         pdf.set_text_color(0, 0, 0)
 
     trend = data.get("trend")
     if trend:
-        h2("Hourly events")
+        _h2(pdf, "Hourly events")
         _trend_chart(pdf, trend)
 
     if data.get("rules"):
-        h2("Top alert rules")
-        with pdf.table(col_widths=(110, 30, 40), text_align="LEFT") as t:
-            r = t.row(); r.cell("Rule"); r.cell("Count"); r.cell("Severity")
-            for rule in data["rules"]:
-                r = t.row(); r.cell(rule["name"]); r.cell(str(rule["count"])); r.cell(rule["sev"])
-
+        _h2(pdf, "Top alert rules")
+        _table(pdf, (120, 25, 35), ("Rule", "Count", "Severity"), [(r["name"], _n(r["count"]), r["sev"]) for r in data["rules"]])
     if data.get("alerts"):
-        h2("Recent alerts")
-        with pdf.table(col_widths=(32, 20, 50, 30, 28, 40), text_align="LEFT") as t:
-            r = t.row()
-            for c in ("Time", "Sev", "Name", "Source", "IP", "MITRE"):
-                r.cell(c)
-            for a in data["alerts"][:20]:
-                r = t.row()
-                r.cell(_fmt_dt(a.get("t"))[:16]); r.cell(a["sev"]); r.cell(a["name"][:40])
-                r.cell(a.get("source", "")[:20]); r.cell(a.get("ip", "")[:20]); r.cell((a.get("technique") or "-")[:30])
-
+        _h2(pdf, "Recent alerts")
+        _table(pdf, (28, 16, 52, 30, 26, 28), ("Time", "Sev", "Alert", "Source", "IP", "MITRE ATT&CK"),
+               [(_fmt_dt(a.get("t"))[:16], a["sev"], a["name"][:48], (a.get("source") or "")[:22], (a.get("ip") or "")[:22],
+                 (a.get("technique") or "-")[:34]) for a in data["alerts"][:20]], font=7.8)
     if data.get("types"):
-        h2("Event source distribution")
-        with pdf.table(col_widths=(100, 40), text_align="LEFT") as t:
-            r = t.row(); r.cell("Type"); r.cell("Events")
-            for ty in data["types"]:
-                r = t.row(); r.cell(ty["name"]); r.cell(str(ty["count"]))
+        _h2(pdf, "Event source distribution")
+        _table(pdf, (110, 70), ("Type", "Events"), [(t["name"], _n(t["count"])) for t in data["types"]])
 
     geo = data.get("geo") or {}
     if geo.get("countries"):
-        h2("Blocked inbound - top countries")
-        pdf.multi_cell(0, 6, "%s connections/min, %s denied of %s total in the window." %
-                       (geo.get("per_min", "-"), geo.get("denied", "-"), geo.get("total", "-")))
-        with pdf.table(col_widths=(80, 40, 40), text_align="LEFT") as t:
-            r = t.row(); r.cell("Country"); r.cell("Connections"); r.cell("Denied")
-            for c in geo["countries"]:
-                r = t.row(); r.cell(c.get("country") or c.get("cc", "")); r.cell(str(c.get("count", 0))); r.cell(str(c.get("denied", 0)))
+        _h2(pdf, "Traffic by country")
+        pdf.multi_cell(0, 5, _latin("%s connections a minute; %s denied of %s in the window." % (
+            _n(geo.get("per_min")), _n(geo.get("denied")), _n(geo.get("total")))), new_x="LMARGIN", new_y="NEXT")
+        pdf.ln(1)
+        _table(pdf, (90, 45, 45), ("Country", "Connections", "Denied"),
+               [(c.get("country") or c.get("cc", ""), _n(c.get("count", 0)), _n(c.get("denied", 0))) for c in geo["countries"]])
 
     con = data.get("connections")
     if con:
-        def h3(text):
-            pdf.ln(2)
-            pdf.set_font("helvetica", "B", 11)
-            pdf.cell(0, 7, text, new_x="LMARGIN", new_y="NEXT")
-            pdf.set_font("helvetica", "", 9)
-
-        def table(widths, head, body):
-            pdf.set_font("helvetica", "", 8.5)
-            with pdf.table(col_widths=widths, text_align="LEFT") as t:
-                r = t.row()
-                for c in head:
-                    r.cell(c)
-                for line in body:
-                    r = t.row()
-                    for c in line:
-                        r.cell(_latin(str(c)))
-            pdf.set_font("helvetica", "", 10)
-
-        h2("Denied connections - last %sh" % con.get("hours", 24))
-        kv_table([("Denied connections (all)", _n(con.get("denied_total"))),
+        _h2(pdf, "Denied connections - last %sh" % con.get("hours", 24))
+        _kv(pdf, [("Denied connections (all)", _n(con.get("denied_total"))),
                   ("Inbound attempts from the internet", "%s from %s addresses" % (_n(con.get("denied_inbound")), _n(con.get("attackers")))),
                   ("Late replies to your own connections", "%s (dropped, not attacks)" % _n(con.get("denied_replies")))])
         if con.get("denied_ports"):
-            h3("Ports attackers tried (denied)")
-            table((30, 60, 40, 50), ("Port", "Service", "Attempts", "Attacker addresses"),
-                  [("%s%s" % (x["port"], "/" + x["proto"].lower() if x.get("proto") else ""), service(x["port"]) or "-",
-                    _n(x["count"]), _n(x["sources"])) for x in con["denied_ports"]])
+            _h3(pdf, "Ports attackers tried")
+            _table(pdf, (30, 70, 40, 40), ("Port", "Service", "Attempts", "Attacker addresses"),
+                   [("%s%s" % (x["port"], "/" + x["proto"].lower() if x.get("proto") else ""), service(x["port"]) or "-",
+                     _n(x["count"]), _n(x["sources"])) for x in con["denied_ports"]])
         if con.get("top_attackers"):
-            h3("Top attackers")
-            table((30, 24, 16, 18, 52, 40), ("Address", "Country", "Network", "Denied", "Ports used", "Sites targeted"),
-                  [(x["ip"], x.get("country") or "", _net(x.get("net")) or "-", _n(x["count"]), _ports(x.get("ports")),
-                    ", ".join(x.get("sites") or [])) for x in con["top_attackers"]])
-        h2("Successful connections - last %sh" % con.get("hours", 24))
-        kv_table([("Allowed connections", _n(con.get("allowed_total")))])
+            _h3(pdf, "Top attackers")
+            _table(pdf, (30, 24, 16, 18, 52, 40), ("Address", "Country", "Network", "Denied", "Ports used", "Sites targeted"),
+                   [(x["ip"], x.get("country") or "", _net(x.get("net")) or "-", _n(x["count"]), _ports(x.get("ports")),
+                     ", ".join(x.get("sites") or [])) for x in con["top_attackers"]], font=7.8)
+        _h2(pdf, "Successful connections - last %sh" % con.get("hours", 24))
+        _kv(pdf, [("Allowed connections", _n(con.get("allowed_total")))])
         if con.get("allowed_ports"):
-            h3("Ports in use")
-            table((30, 60, 34, 28, 28), ("Port", "Service", "Connections", "Sources", "Destinations"),
-                  [("%s%s" % (x["port"], "/" + x["proto"].lower() if x.get("proto") else ""), service(x["port"]) or "-",
-                    _n(x["count"]), _n(x["sources"]), _n(x["destinations"])) for x in con["allowed_ports"]])
+            _h3(pdf, "Ports in use")
+            _table(pdf, (30, 60, 34, 28, 28), ("Port", "Service", "Connections", "Sources", "Destinations"),
+                   [("%s%s" % (x["port"], "/" + x["proto"].lower() if x.get("proto") else ""), service(x["port"]) or "-",
+                     _n(x["count"]), _n(x["sources"]), _n(x["destinations"])) for x in con["allowed_ports"]])
         if con.get("allowed_inbound"):
-            h3("Allowed in from the internet")
-            table((32, 24, 34, 30, 40, 20), ("From", "Country", "Site", "To", "Ports", "Conns"),
-                  [(x["ip"] + (" (%s)" % _net(x["net"]) if x.get("net") else ""), x.get("country") or "", x.get("site") or "",
-                    ", ".join(x.get("dst") or []), _ports(x.get("ports")), _n(x["count"])) for x in con["allowed_inbound"]])
+            _h3(pdf, "Allowed in from the internet")
+            _table(pdf, (32, 24, 34, 30, 40, 20), ("From", "Country", "Site", "To", "Ports", "Conns"),
+                   [(x["ip"] + (" (%s)" % _net(x["net"]) if x.get("net") else ""), x.get("country") or "", x.get("site") or "",
+                     ", ".join(x.get("dst") or []), _ports(x.get("ports")), _n(x["count"])) for x in con["allowed_inbound"]], font=7.8)
         if con.get("allowed_flows"):
-            h3("Busiest connections - who to whom")
-            table((28, 38, 18, 40, 34, 22), ("From", "To", "Direction", "Ports", "Firewall", "Conns"),
-                  [(x["src"], x["dst"] + (" (%s)" % x["dst_country"] if x.get("dst_country") else ""), x.get("dir") or "",
-                    _ports(x.get("ports")), x.get("site") or "", _n(x["count"])) for x in con["allowed_flows"]])
+            _h3(pdf, "Busiest connections - who to whom")
+            _table(pdf, (28, 38, 18, 40, 34, 22), ("From", "To", "Direction", "Ports", "Firewall", "Conns"),
+                   [(x["src"], x["dst"] + (" (%s)" % x["dst_country"] if x.get("dst_country") else ""), x.get("dir") or "",
+                     _ports(x.get("ports")), x.get("site") or "", _n(x["count"])) for x in con["allowed_flows"]], font=7.8)
 
     cluster, res = data.get("cluster") or {}, data.get("resources") or {}
     if cluster or res:
-        h2("OpenSearch & host health")
-        kv_rows = []
+        _h2(pdf, "OpenSearch and host health")
+        rows = []
         if cluster:
-            kv_rows.append(("OpenSearch status", "%s | %s node(s) | %s%% shards active | %s unassigned" %
-                            (str(cluster.get("status") or "-").upper(), cluster.get("nodes", "-"),
-                             ("%.0f" % cluster["active_pct"]) if cluster.get("active_pct") is not None else "-",
-                             cluster.get("unassigned", "-"))))
+            rows.append(("OpenSearch status", "%s  |  %s node(s)  |  %s%% shards active  |  %s unassigned" % (
+                str(cluster.get("status") or "-").upper(), cluster.get("nodes", "-"),
+                ("%.0f" % cluster["active_pct"]) if cluster.get("active_pct") is not None else "-", cluster.get("unassigned", "-"))))
         if res:
-            kv_rows += [
-                ("Host CPU", "%.0f%% (load %.2f on %s cores)" % (res.get("cpu_pct", 0), res.get("load1", 0), res.get("cores", "-"))),
-                ("Host memory", "%.0f%% (%.1f of %.1f GB)" % (res.get("mem_pct", 0), res.get("mem_used_gb", 0), res.get("mem_total_gb", 0))),
-                ("Host disk", "%.0f%% (%.1f of %.1f GB)" % (res.get("disk_pct", 0), res.get("disk_used_gb", 0), res.get("disk_total_gb", 0))),
-            ]
-        kv_table(kv_rows)
-
+            rows += [("Host CPU", "%.0f%% (load %.2f on %s cores)" % (res.get("cpu_pct", 0), res.get("load1", 0), res.get("cores", "-"))),
+                     ("Host memory", "%.0f%% (%.1f of %.1f GB)" % (res.get("mem_pct", 0), res.get("mem_used_gb", 0), res.get("mem_total_gb", 0))),
+                     ("Host disk", "%.0f%% (%.1f of %.1f GB)" % (res.get("disk_pct", 0), res.get("disk_used_gb", 0), res.get("disk_total_gb", 0)))]
+        _kv(pdf, rows)
     store = data.get("storage") or {}
     if store:
-        h2("Storage & retention")
-        kv_table([
-            ("Disk free", "%s of %s" % (_fmt_bytes(store.get("disk_free")), _fmt_bytes(store.get("disk_total")))),
-            ("Average daily volume", _fmt_bytes(store.get("avg_daily_total"))),
-            ("Estimated days of storage left", ("%.0f" % store["days_left"]) if store.get("days_left") else "-"),
-        ])
-
+        _h2(pdf, "Storage and retention")
+        _kv(pdf, [("Disk free", "%s of %s" % (_fmt_bytes(store.get("disk_free")), _fmt_bytes(store.get("disk_total")))),
+                  ("Average daily volume", _fmt_bytes(store.get("avg_daily_total"))),
+                  ("Estimated days of storage left", ("%.0f" % store["days_left"]) if store.get("days_left") else "-")])
+    pdf.ln(4)
+    pdf.set_font("helvetica", "I", 8)
+    pdf.set_text_color(*MUTED)
+    pdf.multi_cell(0, 4.2, _latin("Generated automatically by UTMStack Observatory from the SIEM's own data. Counts and aggregates "
+                                  "only; see the dashboard for detail. " + copyright_line(data)))
     return bytes(pdf.output())
 
 
-# --------------------------------------------------------------------------------------- storage
 def generate(data_dir, data):
     """Render both formats and write them atomically; returns this run's metadata."""
     d = reports_dir(data_dir)

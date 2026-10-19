@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Victor Beitner. All rights reserved. See LICENSE.
 import os, ssl, sys, urllib.request
 
 scheme = "https" if os.environ.get("TLS_CERT") else "http"

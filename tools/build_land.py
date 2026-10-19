@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# Copyright (c) 2026 Victor Beitner. All rights reserved. See LICENSE.
 """Rebuild app/land.json (world land outline for the live map) from world-atlas TopoJSON.
 
 Source data: Natural Earth 1:110m land (public domain), packaged as TopoJSON by world-atlas (ISC):

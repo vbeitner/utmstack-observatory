@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Victor Beitner. All rights reserved. See LICENSE.
 """Attacker-IP enrichment: location and VPN / hosting / Tor status.
 
 Local first: DB-IP City Lite (location, CC BY 4.0) plus the X4BNet VPN and datacenter range lists and the Tor

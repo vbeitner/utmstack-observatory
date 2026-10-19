@@ -3,10 +3,11 @@
 | | |
 |---|---|
 | **Product** | UTMStack Observatory |
-| **Versions** | Assessed: 1.14.2 (deployed) and 1.15.0 (source). Retested after fixes: **1.16.0**; OBS-08 fixed in **1.19.0** |
+| **Versions** | Assessed: 1.14.2 (deployed) and 1.15.0 (source). Retested after fixes: **1.16.0**; OBS-08 fixed in **1.19.0**; OBS-04 and OBS-11 closed in **1.21.0** |
 | **Dates** | 18–19 October 2026 |
 | **Type** | White-box review: automated scanning, manual source review, and live tests against isolated local instances |
 | **Performed by** | AI-assisted assessment (Claude, Anthropic) for the product owner. This is not a third-party penetration test. |
+| **Copyright** | © 2026 Victor Beitner. All rights reserved. Confidential. |
 
 ---
 
@@ -30,7 +31,10 @@ The assessment raised **18 findings**: 7 medium, 9 low and 2 informational. In v
 | Mitigated or partly fixed (the remaining part is an accepted risk) | 5 |
 | Open (recommendation, accepted for this release) | 1 |
 
-OBS-08, the one open finding, is fixed in 1.19.0 (dedicated read-only OpenSearch user).
+OBS-08, the one open finding, is fixed in 1.19.0 (dedicated read-only OpenSearch user). In 1.21.0 the map library
+was upgraded (OBS-04 fixed) and the login lockout became per user for Tailscale users too, with a server-wide
+slow-down against guessing from many addresses (OBS-11 fixed). As of 1.21.0: **15 fixed, 3 partly fixed** (OBS-09,
+OBS-15, OBS-16; the remaining parts are accepted risks), **0 open**.
 
 The most significant issues, all now fixed:
 
@@ -109,14 +113,14 @@ already printed as commands. This adds one deliberate, narrow write path that ke
 | OBS-01 | Plain HTTP by default while Basic-auth credentials ride on every request | Medium | **Fixed for new installs** (TLS by default); existing installs keep their setting |
 | OBS-02 | Pre-auth slow-connection denial of service | Medium | **Fixed** |
 | OBS-03 | CSP allows `script-src 'unsafe-inline'` | Medium | **Fixed** |
-| OBS-04 | Vendored MapLibre GL JS 4.7.1 attribution XSS (GHSA-jrc7-96c5-q579) | Medium | **Mitigated** (vulnerable control removed; library upgrade planned) |
+| OBS-04 | Vendored MapLibre GL JS 4.7.1 attribution XSS (GHSA-jrc7-96c5-q579) | Medium | **Fixed in 1.21.0** (MapLibre 6.12.0; vulnerable control already removed in 1.16.0) |
 | OBS-05 | Any signed-in user can change password, keys and support link without re-auth; no audit log | Medium | **Fixed** (re-auth plus audit log); separate viewer role on roadmap |
 | OBS-06 | Password saved in the UI cannot be revoked with `install.sh password` | Medium | **Fixed** |
 | OBS-07 | DNS rebinding against password-less localhost mode | Medium | **Fixed** |
 | OBS-08 | Dashboard uses UTMStack's OpenSearch administrator account | Low | **Fixed in 1.19.0** (read-only user; warned fallback) |
 | OBS-09 | OpenSearch TLS certificate not verified | Low | **Mitigated** (`OS_CA_FILE` option; default unchanged for UTMStack's internal certificate) |
 | OBS-10 | Dashboard password stored in clear text in `settings.json` | Low | **Fixed** (PBKDF2-SHA256, 600,000 iterations); API keys stay recoverable by design |
-| OBS-11 | Lockout is per IP only; 8-character minimum password | Low | **Partly fixed** (12-character minimum; real client addresses on Swarm since 1.18.0); proxy-aware limits on roadmap |
+| OBS-11 | Lockout is per IP only; 8-character minimum password | Low | **Fixed in 1.21.0** (12-character minimum; real client addresses on Swarm 1.18.0 and over Tailscale 1.21.0; server-wide slow-down) |
 | OBS-12 | IPv6 zone IDs can inject query parameters into lookup URLs | Low | **Fixed** |
 | OBS-13 | Some third-party numbers reach `innerHTML` unescaped | Low | **Fixed** |
 | OBS-14 | Python's default error pages and HEAD/OPTIONS skip security headers | Low | **Fixed** |
@@ -180,7 +184,7 @@ also allows inline event-handler attributes, so any HTML-injection bug would bec
 - `test_obs03_csp_has_no_inline_script_and_the_page_has_no_inline_script`.
 - In a browser: no CSP violations, and the map, drawers and settings all work.
 
-### OBS-04 — MapLibre GL JS 4.7.1 attribution XSS · Medium · Mitigated
+### OBS-04 — MapLibre GL JS 4.7.1 attribution XSS · Medium · Fixed in 1.21.0
 
 **Description.** GHSA-jrc7-96c5-q579 (fixed in MapLibre 6.4.1). MapLibre's attribution control writes the tile
 provider's attribution HTML with `innerHTML`, and its sanitiser lets event-handler payloads through. Exploiting it
@@ -193,8 +197,10 @@ needs a compromised or malicious tile provider (`tiles.openfreemap.org`).
 - The style's own attribution strings are stripped before use.
 - With OBS-03 fixed, an injected handler would be blocked by the CSP anyway.
 
-**Remaining.** Upgrade to MapLibre 6.4.1 or later in a later release. It is a major version and needs map
-regression testing.
+**1.21.0.** Upgraded to MapLibre GL JS **6.12.0** (no OSV advisories; the newest release at least two weeks old when
+chosen, as a supply-chain precaution). Version 6 ships as ES modules: a small loader module hands it to the dashboard
+script, the server stamps the version into the modules' imports and the worker URL so an upgrade never mixes old and
+new files, and the CSP gained `worker-src 'self'` for the module worker. The fixed-text credit stays.
 
 ### OBS-05 — Settings changes without re-authentication; no audit trail · Medium · Fixed
 
@@ -303,7 +309,7 @@ documented.
 
 **Retest.** `test_obs10_password_saved_from_settings_is_hashed`.
 
-### OBS-11 — Per-IP lockout only · Low · Partly fixed
+### OBS-11 — Per-IP lockout only · Low · Fixed in 1.21.0
 
 **Description.** The lockout (5 failures, then 15 minutes) correctly ignores the spoofable `X-Forwarded-For` header,
 but it is per address only. Behind a reverse proxy or shared NAT, one person can lock out everyone, and there is no
@@ -322,9 +328,17 @@ global limit against distributed guessing. The minimum password length was 8.
   check, which counted as a failed login, when a Settings-panel login overrides its own
   (`tests/test_shared_address.py`).
 
-**Residual.** Users behind one NAT or reverse proxy still share an address.
+- **1.21.0, Tailscale:** verification of 1.20.0 showed Tailscale users still arriving as `172.18.0.1`. Tailscale
+  masquerades every packet it forwards from `tailscale0` (its `ts-postrouting` chain), and traffic to the container is
+  forwarded. Where Tailscale is present the installer now adds one `nat POSTROUTING` rule, kept first by a systemd unit
+  that re-runs after `tailscaled` restarts, which exempts only container port 8765 from that masquerade. Verified on
+  the production host: the dashboard logged the client's real Tailscale address (`tests/test_real_ip.py`).
+- **1.21.0, global budget:** above `LOGIN_SURGE_PER_MIN` (default 30) failed logins a minute from all addresses
+  together, every failed attempt is answered after 3 s instead of 0.5 s. Nobody is locked out by it, so a distributed
+  attack cannot lock out legitimate users (`tests/test_branding_and_hardening.py`).
 
-**Roadmap.** Trusted-proxy support and a global failure budget.
+**Residual (accepted).** Users behind one NAT share that NAT's address; a reverse proxy in front of the dashboard
+would need trusted-proxy support, which is not needed for the supported deployment (direct, or over Tailscale).
 
 ### OBS-12 — Lookup URLs built from unencoded IP strings · Low · Fixed
 
@@ -485,9 +499,9 @@ with.
 ## 8. Recommendations for the next release
 
 1. ~~A read-only OpenSearch role and user created by the installer (OBS-08).~~ Done in 1.19.0.
-2. MapLibre GL JS 6.4.1 or later (OBS-04).
+2. ~~MapLibre GL JS 6.4.1 or later (OBS-04).~~ Done in 1.21.0 (6.12.0).
 3. A read-only viewer login for wall screens, with anonymisation enforced on the server (OBS-05).
-4. Trusted-proxy support and a global login-failure budget (OBS-11).
+4. ~~A global login-failure budget (OBS-11).~~ Done in 1.21.0. Trusted-proxy support only if a reverse proxy is used.
 5. A base image pinned by digest, hash-locked dependencies and a monthly rebuild (OBS-16).
 6. A reverse-proxy deployment guide with a trusted certificate, and upgrading existing installs to TLS (OBS-01).
 
@@ -502,3 +516,8 @@ with.
 - [ ] Logs (`install.sh logs`) collected; look for `audit:` and `login:` lines
 - [ ] Image rebuilt monthly (`sudo ./install.sh`) to pick up base-image security fixes
 - [ ] Demo mode (`DEMO=1`) never set on a production install
+
+---
+
+© 2026 Victor Beitner. All rights reserved. Confidential: prepared for the owner and prospective customers of
+UTMStack Observatory.

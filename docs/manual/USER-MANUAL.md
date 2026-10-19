@@ -1,13 +1,14 @@
 # UTMStack Observatory — User Manual
 
-Version 1.20.0 · October 2026
+Version 1.21.0 · October 2026 · © 2026 Victor Beitner. All rights reserved.
 
 UTMStack Observatory is a read-only operations dashboard for a UTMStack v11 SIEM. It sits next to UTMStack, reads
 its OpenSearch data, and turns it into one screen a security team, an IT manager or a NOC wall can understand at a
 glance: which data sources are reporting, how many events and alerts are coming in, where firewall traffic and
 attacks come from on a live world map, and whether the SIEM itself is healthy.
 
-It never changes anything in UTMStack. It only reads.
+It only reads UTMStack's data. The one exception is the optional **Apply fix** button in the SIEM-health panel,
+which you press yourself to repair a yellow OpenSearch status (see [SIEM health](#8-siem-health)).
 
 > Every screenshot and clip in this manual was taken in **demo mode**, which uses a fictional organisation and
 > addresses from the reserved documentation ranges. No real customer data is shown. See
@@ -35,6 +36,7 @@ It never changes anything in UTMStack. It only reads.
 16. [Security and privacy](#16-security-and-privacy)
 17. [Troubleshooting](#17-troubleshooting)
 18. [Third-party data and licences](#18-third-party-data-and-licences)
+19. [Copyright](#19-copyright)
 
 ---
 
@@ -63,8 +65,9 @@ and prints it once at the end of the install.
 
 - After **5 wrong passwords** from the same address, that address is locked out for **15 minutes**, even if the next
   attempt is correct. Both numbers can be changed (see [Configuration reference](#15-configuration-reference)).
-  Since 1.18 the dashboard sees each user's real address, so one person's typos no longer lock everyone else out.
-  Installs from before 1.18 shared one address between all users until the installer is run again.
+  The dashboard sees each user's real address, also over Tailscale (since 1.21), so one person's typos never lock
+  anyone else out. If many wrong passwords arrive from many addresses at once, every failed attempt is slowed down
+  instead, so nobody is locked out by someone else's attack.
 - To change the password, use the [Settings panel](#12-settings-panel) or `sudo ./install.sh password` on the server.
 - To sign out, close the browser. Basic authentication has no sign-out button.
 
@@ -131,7 +134,7 @@ attackers seen in server and cloud logs.
 Arcs move in the direction of the traffic. The side panel shows connections per minute, the percentage denied, top
 countries, and **Latest blocked / failed inbound**, a ticker of the newest blocked connections with their source
 address, location, target and port. Badges on a row mark **VPN**, **Tor** or **Hosting** (datacenter) addresses.
-Hover a ticker row to highlight that location on the map.
+Hover a ticker row to highlight that location on the map; click it for the attacker panel described below.
 
 ### Window and filters
 
@@ -186,6 +189,8 @@ Denied packets that come *from* a web or DNS port (443, 80, 53) *to* a random hi
 replies to connections your own devices had already closed. They are counted separately as "late replies" and
 left out of the ports list, so the list shows only what was really tried. Reputation and WHOIS for the address
 follow below. On a wall screen the panel shows *Site A, Site B…* and no internal addresses.
+
+![Attacker panel](../media/screens/22-attacker.jpg)
 
 ### Where locations come from
 
@@ -259,6 +264,8 @@ certificate, and the commands under *Or fix it by hand* still work for it. The b
 OpenSearch account (`observatory_fixer`) that may only change replica settings; installs with
 `--no-health-fix` show only the commands.
 
+![Apply fix](../media/screens/20-apply-fix.jpg)
+
 ## 9. Trends and history
 
 **Trends · 30 d** shows hourly history for the last 30 days (events, alerts and, if enabled, AI traffic), a
@@ -274,8 +281,14 @@ history database (counts only, never raw events). History starts when the dashbo
 ## 10. Reports
 
 **Reports** lists generated reports, newest first, each as **PDF** and **HTML**. **Generate now** makes one for the
-last 24 hours: key figures and trends, top alert rules and recent alerts (with the MITRE ATT&CK technique where the
-rule has one), top blocked countries from the map, and storage health.
+last 24 hours. Every page carries the UTMStack Observatory logo, the host and date at the top, and the copyright
+notice and page number at the bottom. The first page opens with four key figures (events, alerts, data sources,
+blocked attempts) and **Key findings**: up to six plain-language points to read first, such as SSH or RDP allowed in
+from the internet, high-severity alerts, silent data sources or an OpenSearch status that is not green. Then come
+the trend, top alert rules and recent alerts (with the MITRE ATT&CK technique where the rule has one), traffic by
+country, and the sections below.
+
+![Report, first page](../media/screens/21-report.jpg)
 
 ![Reports](../media/screens/14-reports.jpg)
 
@@ -416,6 +429,7 @@ Options are remembered in `/etc/utmstack-observatory/config.env`; pass one again
 | `--proxycheck-key KEY` | none | proxycheck.io key for the online location fallback |
 | `--geoip-online-daily N` | `100` | Daily cap on online lookups; `0` disables them |
 | `--no-health-fix` | button on | No *Apply fix* button in the SIEM-health panel (commands only) |
+| `--no-real-ip-rule` | rule on | Do not install the firewall rule that keeps Tailscale users' real addresses (only installed when Tailscale is present) |
 | `--os-account reader\|backend` | `reader` | OpenSearch account for the dashboard: the read-only `observatory_reader`, or UTMStack's administrator |
 
 ### Environment variables
@@ -439,6 +453,8 @@ Only needed when running `app/server.py` yourself; the installer sets them for y
 | `ABUSEIPDB_KEY`, `VIRUSTOTAL_KEY` (or `_FILE`) | | Reputation API keys |
 | `PROXYCHECK_KEY`, `GEOIP_ONLINE_DAILY` | , `100` | Online location fallback |
 | `LOGIN_MAX_FAILURES`, `LOGIN_LOCK_S` | `5`, `900` | Lockout after N failures, for S seconds |
+| `LOGIN_SURGE_PER_MIN` | `30` | Above this many failed logins a minute from all addresses together, every failed attempt is answered slowly; `0` = off |
+| `OS_FIX_USER`, `OS_FIX_PASS` / `OS_FIX_PASS_FILE` | | OpenSearch account for the *Apply fix* button (the installer sets `observatory_fixer`) |
 | `MAX_CONNECTIONS`, `MAX_CONNECTIONS_PER_IP` | `64`, `32` | Concurrent connections in total and per address; extra ones are refused at once |
 | `SHARED_ADDRESS_HINT_AFTER` | `100` | Log a one-time hint when this many first connections all came from one Swarm network address; `0` = off |
 | `HEADER_DEADLINE_S` | `10` | A client must send its whole request header within this time |
@@ -458,6 +474,8 @@ Only needed when running `app/server.py` yourself; the installer sets them for y
 | IP location and VPN/Tor data | `/data/geoip/` |
 | Installer settings | `/etc/utmstack-observatory/config.env` |
 | Dashboard password | `/etc/utmstack-observatory/admin.pass` (root only); a password set in Settings is stored hashed |
+| OpenSearch account passwords | `/etc/utmstack-observatory/os_reader.pass`, `os_fixer.pass` (root only) |
+| Tailscale real-address rule | `/usr/local/sbin/utmstack-observatory-real-ip` and the systemd unit `utmstack-observatory-real-ip` |
 
 ## 16. Security and privacy
 
@@ -465,7 +483,11 @@ Only needed when running `app/server.py` yourself; the installer sets them for y
   read-only OpenSearch account (`observatory_reader`), so even a fault in the dashboard could not delete or change SIEM
   data. If that account cannot be set up (for example on a UTMStack without OpenSearch security), the installer warns
   and uses UTMStack's own account instead. The install output ends with the account in use.
-- **Login on everything** except a minimal health check. Repeated wrong passwords lock out the source address.
+- **Apply fix** uses a second, narrow OpenSearch account (`observatory_fixer`) that can only change replica
+  settings; it cannot read, change or delete data. The dashboard works out the fix from the cluster itself and runs
+  only a fixed list of changes, and only after you enter your password. `--no-health-fix` leaves it out.
+- **Login on everything** except a minimal health check. Repeated wrong passwords lock out the source address, and a
+  wave of wrong passwords from many addresses slows every failed attempt down.
   Changing the login, an API key or the support contact also asks for the current password, and every change is
   logged.
 - **Container hardening**: read-only file system, all Linux capabilities dropped, unprivileged user, no Docker socket,
@@ -475,7 +497,9 @@ Only needed when running `app/server.py` yourself; the installer sets them for y
 - **Encryption**: new installs use HTTPS with a self-signed certificate (browsers warn once; `--tls-cert`/`--tls-key`
   for your own). Installs from before 1.16 keep plain HTTP until re-run with `--tls`.
   The installer publishes the port in Swarm's host mode on the manager node, so the dashboard sees each user's real
-  address (the login lockout and connection limits are per user, not shared). The port still listens on every
+  address (the login lockout and connection limits are per user, not shared). Where Tailscale runs on the server it
+  also adds one firewall rule (and a small boot service) that exempts the dashboard's port from Tailscale's address
+  rewriting, so Tailscale users are seen individually too; nothing else about Tailscale changes. The port still listens on every
   interface, so restrict it with the host firewall, for example:
   `iptables -I DOCKER-USER -p tcp --dport 8765 ! -s 100.64.0.0/10 -j DROP`.
 - **What leaves the server**: public IP addresses for WHOIS (rdap.org), reputation (AbuseIPDB, VirusTotal, only if
@@ -497,7 +521,8 @@ The security assessment is in [`../security/SECURITY-ASSESSMENT.md`](../security
 | Ingest lag ~1 s but feeds are late | The headline is the newest event; click the card for the per-source delay. |
 | AI Traffic empty or low | It only sees traffic that crosses the firewall, not traffic inside the LAN. |
 | Street map does not appear | The browser cannot reach `tiles.openfreemap.org`; the outline map is used instead. |
-| Locked out | Wait 15 minutes, or restart the service, which clears the lockout. If *everyone* is locked out at once, the install predates 1.18 and all users share one address: re-run `sudo ./install.sh`. |
+| Locked out | Wait 15 minutes, or restart the service (`sudo docker service update --force utmstack-observatory`), which clears the lockout. If *everyone* is locked out at once, all users share one address: re-run `sudo ./install.sh` (1.21 or later also covers Tailscale). |
+| Everyone over Tailscale appears as one address (`172.18.0.1` in `login:` log lines) | The real-address rule is missing: re-run `sudo ./install.sh`, and check `systemctl status utmstack-observatory-real-ip`. |
 | Log line `hint: the first 100 connections all came from 10.0.0.2 …` | The port still goes through Swarm's ingress mesh (or a proxy), so all users share one address. Re-run `sudo ./install.sh` (1.18 or later). |
 | Installer: "Login check skipped: the Settings panel overrides the installer's login" | Normal. Sign in with the login set in the Settings panel, or reset it with `sudo ./install.sh password`. |
 | Anything else | `sudo ./install.sh logs` and `sudo ./install.sh status`; **Copy diagnostics** in the health panel. |
@@ -506,7 +531,7 @@ The security assessment is in [`../security/SECURITY-ASSESSMENT.md`](../security
 
 | Component | Use | Licence |
 |---|---|---|
-| MapLibre GL JS 4.7.1 | Street map rendering (bundled) | BSD-3-Clause |
+| MapLibre GL JS 6.12.0 | Street map rendering (bundled) | BSD-3-Clause |
 | OpenFreeMap / OpenStreetMap | Map tiles | ODbL (© OpenStreetMap contributors) |
 | DB-IP City Lite | IP location | CC BY 4.0, "IP Geolocation by DB-IP" |
 | X4BNet lists_vpn | VPN and datacenter ranges | See the project's repository |
@@ -514,4 +539,9 @@ The security assessment is in [`../security/SECURITY-ASSESSMENT.md`](../security
 | Natural Earth (via world-atlas) | Outline map | Public domain |
 | fpdf2 | PDF reports | LGPL-3.0 |
 
-Attribution for the map and IP data is shown in the dashboard itself, under the map.
+Attribution for the map is shown in the top-right corner of the street map, and for the IP data under the map.
+
+## 19. Copyright
+
+UTMStack Observatory and this manual are © 2026 Victor Beitner. All rights reserved. The software is proprietary;
+see the `LICENSE` file. UTMStack is a separate product by its own authors; Observatory is an independent add-on.

@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# Copyright (c) 2026 Victor Beitner. All rights reserved. See LICENSE.
 """UTMStack Observatory: a read-only operations dashboard for a UTMStack SIEM.
 
 Reads from UTMStack's OpenSearch (events, alerts, ingest statistics) and keeps 30 days of hourly
@@ -12,7 +13,7 @@ import urllib.error, urllib.request
 from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-VERSION = "1.20.0"
+VERSION = "1.21.0"
 HERE = os.path.dirname(os.path.abspath(__file__))
 if HERE not in sys.path:                          # the container runs "python3 -I", which leaves this folder off sys.path
     sys.path.insert(0, HERE)
@@ -1274,7 +1275,20 @@ GEO = geoip.GeoIP(DATA_DIR, secret("PROXYCHECK_KEY"), int(env("GEOIP_ONLINE_DAIL
 GEO_WINDOWS_S = (60, 300, 900)
 # Street basemap: MapLibre is served from here; only map tiles, fonts and icons come from this one host.
 TILE_HOST = "https://tiles.openfreemap.org"
-STATIC_FILES = {"/maplibre-gl.js": "text/javascript; charset=utf-8", "/maplibre-gl.css": "text/css; charset=utf-8"}
+STATIC_FILES = {"/maplibre-gl.css": "text/css; charset=utf-8"}
+# MapLibre GL JS 6 (ES modules). Their imports of each other get ?v=<version> when served (see module_body).
+MODULE_FILES = ("/maplibre-loader.mjs", "/maplibre-gl.mjs", "/maplibre-gl-shared.mjs", "/maplibre-gl-worker.mjs")
+_module_cache = {}
+
+
+def module_body(path):
+    if path not in _module_cache:
+        with open(os.path.join(HERE, path[1:]), "rb") as f:
+            body = f.read()
+        v = VERSION.encode()
+        body = body.replace(b"__VERSION__", v).replace(b'"./maplibre-gl-shared.mjs"', b'"./maplibre-gl-shared.mjs?v=' + v + b'"')
+        _module_cache[path] = body
+    return _module_cache[path]
 GEO_TTL_S = 10                                   # one shared query per 10 s, however many viewers
 SITE_TTL_S = 1800                                # re-check firewall locations every 30 min
 MAX_ARCS = 200
@@ -1871,6 +1885,7 @@ def report_connections(hours=24):
 
 
 # ---------------------------------------------------------------- support info (logo click)
+COPYRIGHT = "© 2026 Victor Beitner. All rights reserved."
 DEFAULT_SUPPORT = "Cyber Security Canada|info@cybersecuritycanada.com||https://cybersecuritycanada.com"
 STARTED_AT = datetime.now(timezone.utc).isoformat()
 
@@ -1894,7 +1909,7 @@ def current_support():
 
 def api_support(anon=False):
     """Contact + health summary for the support panel. Never includes secrets or client names."""
-    out = {"contact": current_support(), "version": VERSION, "installed": env("INSTALLED_AT") or None}
+    out = {"contact": current_support(), "version": VERSION, "installed": env("INSTALLED_AT") or None, "copyright": COPYRIGHT}
     if anon:                                     # wall screen: contact and version only
         return out
     with _lock:
@@ -1950,6 +1965,27 @@ LOGIN_MAX_FAILURES = int(env("LOGIN_MAX_FAILURES", "5"))
 LOGIN_LOCK_S = float(env("LOGIN_LOCK_S", "900"))
 _logins = {}                                     # ip -> {"fails": [t, ...], "until": t}
 _logins_lock = threading.Lock()
+# Server-wide budget against guessing spread over many addresses: past this many failures a minute (all addresses
+# together), every failed attempt is answered slowly instead of locking anyone out.
+LOGIN_SURGE_PER_MIN = int(env("LOGIN_SURGE_PER_MIN", "30") or "0")
+_login_fail_times = []
+_surge_noted = [0.0]
+
+
+def login_surge():
+    """True while failures from all addresses together exceed LOGIN_SURGE_PER_MIN."""
+    if not LOGIN_SURGE_PER_MIN:
+        return False
+    now = time.time()
+    with _logins_lock:
+        while _login_fail_times and now - _login_fail_times[0] > 60:
+            _login_fail_times.pop(0)
+        busy = len(_login_fail_times) > LOGIN_SURGE_PER_MIN
+        if busy and now - _surge_noted[0] > 60:
+            _surge_noted[0] = now
+            print("login: %d failed logins in the last minute from all addresses: slowing every failed attempt down"
+                  % len(_login_fail_times), flush=True)
+    return busy
 
 
 def client_error(where, e):
@@ -1977,6 +2013,8 @@ def login_attempt(ip, check):
             st["fails"] = []
             return True, 0
         st["fails"] = [t for t in st["fails"] if now - t < LOGIN_LOCK_S] + [now]
+        if len(_login_fail_times) < 10000:
+            _login_fail_times.append(now)
         if len(st["fails"]) >= LOGIN_MAX_FAILURES:
             st["until"] = now + LOGIN_LOCK_S
             print("login: %s locked for %d s after %d failed logins" % (ip, LOGIN_LOCK_S, len(st["fails"])), flush=True)
@@ -2126,7 +2164,7 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("X-Frame-Options", "DENY")
         self.send_header("Referrer-Policy", "no-referrer")
         self.send_header("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; "
-                         "img-src 'self' data: blob: %s; connect-src 'self' %s; worker-src blob:; child-src blob:; "
+                         "img-src 'self' data: blob: %s; connect-src 'self' %s; worker-src 'self' blob:; child-src blob:; "
                          "object-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'" % (TILE_HOST, TILE_HOST))
         self.send_header("Permissions-Policy", "camera=(), microphone=(), geolocation=(), payment=(), usb=(), interest-cohort=()")
         self.send_header("Cross-Origin-Opener-Policy", "same-origin")
@@ -2159,7 +2197,7 @@ class Handler(BaseHTTPRequestHandler):
             if ok:
                 return True
             print("login: failed login from %s" % ip, flush=True)
-            time.sleep(0.5)                           # slow down password guessing
+            time.sleep(3 if login_surge() else 0.5)   # slow down password guessing; much slower during a spread-out attack
         self.send(401, "text/plain", b"Authentication required",
                   {"WWW-Authenticate": 'Basic realm="UTMStack Observatory", charset="UTF-8"'})
         return False
@@ -2230,6 +2268,8 @@ class Handler(BaseHTTPRequestHandler):
         elif u.path == "/api/layout":
             lay, notes = layout_store.load_with_notes(DATA_DIR)
             self.send(200, "application/json", json.dumps({"layout": lay, "notes": notes}).encode())
+        elif u.path in MODULE_FILES:
+            self.send(200, "text/javascript; charset=utf-8", module_body(u.path), {"Cache-Control": "private, max-age=86400"})
         elif u.path in STATIC_FILES:
             with open(os.path.join(HERE, u.path[1:]), "rb") as f:
                 self.send(200, STATIC_FILES[u.path], f.read(), {"Cache-Control": "private, max-age=86400"})
@@ -2249,7 +2289,7 @@ class Handler(BaseHTTPRequestHandler):
             with open(os.path.join(HERE, "index.html"), "rb") as f:
                 page = f.read()
             # versioned script/style URLs: a browser holding an older copy cannot mix it with a new page after an upgrade
-            for name in (b"/app.js", b"/layout.js", b"/maplibre-gl.js", b"/maplibre-gl.css"):
+            for name in (b"/app.js", b"/layout.js", b"/maplibre-loader.mjs", b"/maplibre-gl.css"):
                 page = page.replace(b'"' + name + b'"', b'"' + name + b"?v=" + VERSION.encode() + b'"')
             self.send(200, "text/html; charset=utf-8", page)
         else:

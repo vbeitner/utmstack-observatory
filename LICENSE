@@ -1,0 +1,18 @@
+UTMStack Observatory
+Copyright (c) 2026 Victor Beitner. All rights reserved.
+
+This software and its documentation (the "Software") are proprietary and confidential. No part of the Software may
+be copied, modified, distributed, sublicensed, sold or used to provide a service to third parties without the prior
+written permission of the copyright holder, except as allowed by a separate written licence agreement.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE
+WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE COPYRIGHT
+HOLDER BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE.
+
+Third-party components keep their own licences and are not covered by the above:
+  - MapLibre GL JS 6.12.0 (app/maplibre-gl*.mjs, app/maplibre-gl.css): BSD-3-Clause, see app/MAPLIBRE-LICENSE.txt
+  - fpdf2 (PDF reports, installed from PyPI): LGPL-3.0
+  - maxminddb (installed from PyPI): Apache-2.0
+  - Natural Earth land outline (app/land.json): public domain
+  - Data downloaded at run time: DB-IP City Lite (CC BY 4.0), X4BNet lists_vpn, Tor Project exit list,
+    OpenFreeMap / OpenMapTiles / OpenStreetMap map tiles (ODbL); attribution is shown in the dashboard.

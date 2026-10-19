@@ -13,13 +13,18 @@ A read-only operations dashboard for a UTMStack v11 SIEM. It reads UTMStack's ow
 - **Movable widgets and named screens** (Edit button right of the screen tabs) with a shared default layout and
   personal per-browser layouts
 - **Wall mode** for a NOC screen: full screen, client firewall names replaced by *Site A, Site B…*, rotating every 30 s
-- **PDF/HTML reports** on demand or on a daily schedule, downloadable from the dashboard (Reports, top right)
+- **Attacker panel**: click a blocked connection to see every port that address tried in the last 24 hours (denied vs
+  allowed, with service names), the sites and addresses it reached, reputation and WHOIS
+- **SIEM health with Apply fix**: click the OpenSearch badge for a plain-language explanation of a yellow/red status
+  and, where it is safe, a one-click fix (password-protected, narrow write account)
+- **Branded PDF/HTML reports** on demand or daily: logo header and copyright footer on every page, key figures, key
+  findings, denied and successful connections (ports, attackers, who connected to whom)
 
 **Documentation:** [User manual](docs/manual/USER-MANUAL.md) (with screenshots and clips) ·
 [Feature tour](docs/tour/index.html) · [Security assessment](docs/security/SECURITY-ASSESSMENT.md) ·
 [Release notes](RELEASE-NOTES.md). A demo with synthetic data runs with `DEMO=1` (see the manual).
 
-Python standard library only, with one exception (`fpdf2`, for the PDF reports). Runs as one container (a Docker Swarm service) next to UTMStack.
+Python standard library only, with two exceptions (`fpdf2` for the PDF reports, `maxminddb` for IP locations). Runs as one container (a Docker Swarm service) next to UTMStack.
 
 ## Requirements
 
@@ -55,6 +60,7 @@ Common options:
 | `--abuseipdb-key KEY` / `--virustotal-key KEY` | enable live IP-reputation lookups on alert detail (see Security) |
 | `--os-account reader\|backend` | OpenSearch account for the dashboard: the dedicated read-only user (default) or UTMStack's administrator |
 | `--no-health-fix` | no *Apply fix* button in the SIEM-health panel; it shows the commands only |
+| `--no-real-ip-rule` | do not install the firewall rule that keeps Tailscale users' real addresses (see Security) |
 
 Other commands: `sudo ./install.sh status | logs | password [NEW] | uninstall [--purge]`.
 `uninstall` keeps your stored history; `--purge` deletes it, the config and the image.
@@ -92,6 +98,14 @@ optionally from proxycheck.io for the rest (`--geoip-online-daily`, default 100 
   installer to switch an older install. If the log shows a `hint: the first 100 connections all came from …` line,
   the port is still going through the mesh (or a proxy). Checks run on the server itself (`curl 127.0.0.1`) arrive from
   Docker's bridge gateway (e.g. `172.18.0.1`), not `127.0.0.1`.
+- **Tailscale users keep their own address (1.21+).** Tailscale masquerades everything it forwards from `tailscale0`,
+  including traffic to the dashboard's container, so all Tailscale users used to arrive as `172.18.0.1` and share one
+  lockout. Where `tailscale0` exists, the installer installs `/usr/local/sbin/utmstack-observatory-real-ip` and the
+  systemd unit `utmstack-observatory-real-ip`, which put one `nat POSTROUTING` rule first: Tailscale-marked packets
+  to container port 8765 on `docker_gwbridge` are not masqueraded. The unit re-runs after `tailscaled` restarts and at
+  boot; `uninstall` and `--no-real-ip-rule` remove it. Nothing else about Tailscale changes.
+- **Password guessing from many addresses** (more than `LOGIN_SURGE_PER_MIN`, default 30 failures a minute in total)
+  slows every failed attempt to 3 s instead of locking anyone out.
 - **Swarm publishes the port on every interface.** Restrict it with your firewall. Example allowing only Tailscale and localhost:
   `iptables -I DOCKER-USER -p tcp --dport 8765 ! -s 100.64.0.0/10 -j DROP` (adapt, and persist it your usual way).
 - The container is read-only, drops all capabilities, runs as an unprivileged user, and has no Docker socket. It only *reads* OpenSearch.
@@ -106,6 +120,11 @@ optionally from proxycheck.io for the rest (`--geoip-online-daily`, default 100 
   output show which account is in use. `--os-account backend` switches back to the administrator account on purpose.
   To remove the user after uninstalling, delete `observatory_reader` and `observatory_read` in OpenSearch's security
   settings (or `DELETE _plugins/_security/api/internalusers/observatory_reader` and `.../roles/observatory_read`).
+- **Apply fix account (1.20+).** For the SIEM-health *Apply fix* button the installer also creates `observatory_fixer`
+  with role `observatory_health_fix`: `indices:admin/settings/update` on all indices, `cluster:admin/settings/update`,
+  `indices:admin/template/put` and `cluster:monitor/health` only. It cannot read, write or delete data. The server
+  re-derives the fix from the live cluster and only sends replica-0 settings, two plugin settings and one template, after
+  the dashboard password; `--no-health-fix` leaves the account out.
 - It connects to OpenSearch without verifying its certificate (UTMStack uses an internal self-signed one on a private network);
   set `OS_CA_FILE` to verify it.
 - Full assessment, findings and fixes: [docs/security/SECURITY-ASSESSMENT.md](docs/security/SECURITY-ASSESSMENT.md).
@@ -125,9 +144,13 @@ Dashboard layout (widgets, screens, wall rotation) has its own editor — the dr
 ## Reports
 
 The **Reports** button in the header opens a drawer listing generated reports (newest first) with PDF and HTML
-download links, and a **Generate now** button for an on-demand report. Each report covers the last 24 hours:
-the KPI/trend summary, top alert rules and recent alerts (with MITRE ATT&CK technique where the rule maps to
-one), the Live Firewall Map's top blocked-inbound countries, and storage/retention health.
+download links, and a **Generate now** button for an on-demand report. Each report covers the last 24 hours and
+carries the UTMStack Observatory logo at the top and "© Victor Beitner · Confidential · Page n of N" at the bottom of
+every page. It opens with four key figures and **Key findings** (risky ports allowed in from the internet,
+high-severity alerts, silent sources, OpenSearch status), then the trend, top alert rules and recent alerts (with
+MITRE ATT&CK technique), traffic by country, **denied connections** (ports attackers tried, top attackers) and
+**successful connections** (ports in use, allowed in from the internet, busiest who-to-whom flows), and host and
+storage health.
 
 Set a generation hour (0–23, UTC) in the Settings panel to also get one automatically every day; leave it
 blank and reports are on-demand only. Files live in `/data/reports` (the same volume as the history database
@@ -186,6 +209,8 @@ The installer sets these; you only need them to run `app/server.py` by hand.
 | `VIRUSTOTAL_KEY` / `_FILE` | *(off)* | enables live VirusTotal vendor-detection lookups on an alert's IPs |
 | `REQUEST_TIMEOUT_S` | `15` | idle/slow clients are dropped after this many seconds |
 | `LOGIN_MAX_FAILURES`, `LOGIN_LOCK_S` | `5`, `900` | failed logins from one address before it's locked out, and for how long |
+| `LOGIN_SURGE_PER_MIN` | `30` | failed logins a minute (all addresses) above which every failed attempt is slowed down; `0` = off |
+| `OS_FIX_USER`, `OS_FIX_PASS` / `_FILE` | | OpenSearch account for the *Apply fix* button (installer: `observatory_fixer`) |
 | `MAX_CONNECTIONS`, `MAX_CONNECTIONS_PER_IP` | `64`, `32` | concurrent connections accepted in total / per address; over the cap, new ones are refused immediately |
 | `SHARED_ADDRESS_HINT_AFTER` | `100` | log a one-time hint if this many first connections all came from one address on the container's own network (Swarm ingress); `0` = off |
 | `HEADER_DEADLINE_S` | `10` | a client must send its whole request header within this time (slow-connection protection) |
@@ -210,3 +235,9 @@ delay (device timestamp to stored time). Firewalls often batch logs; Microsoft 3
 not traffic between machines on the same LAN.
 
 **Logs:** `sudo ./install.sh logs`. **Health:** `sudo ./install.sh status`.
+
+## Copyright
+
+UTMStack Observatory is © 2026 Victor Beitner. All rights reserved. Proprietary software; see [LICENSE](LICENSE) for
+the terms and the third-party components (MapLibre GL JS 6.12.0, BSD-3-Clause; fpdf2, LGPL-3.0; map and IP data
+under their own licences).

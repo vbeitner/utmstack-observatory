@@ -102,6 +102,18 @@
   "spots": []
  },
  {
+  "img": "22-attacker",
+  "title": "Click an attacker: every port it tried",
+  "text": "One click on a blocked connection shows what that address did in the last 24 hours: the ports it tried with their service names, how many were denied or allowed, the sites and addresses it reached, then reputation and WHOIS. Late replies to your own connections are counted apart, so the list shows real attempts only.",
+  "spots": [
+   [
+    "#atk0",
+    "Activity",
+    "Connections, denied vs allowed, first and last seen, and the ports tried on your side."
+   ]
+  ]
+ },
+ {
   "img": "07-alerts-for-rule",
   "title": "From a rule to its alerts in one click",
   "text": "Filter alerts by severity, source, rule or free text, and page through the history.",
@@ -165,6 +177,12 @@
   "spots": []
  },
  {
+  "img": "20-apply-fix",
+  "title": "Fix a yellow SIEM with one click",
+  "text": "When OpenSearch turns yellow because of replica copies a one-server cluster can never place, enter your password and press Apply fix. Each step is shown with its result. A separate, narrow account makes only these changes; it cannot read or delete data.",
+  "spots": []
+ },
+ {
   "img": "13-trends",
   "title": "30 days of history",
   "text": "Hourly history and daily and weekly comparisons, kept in the dashboard's own database because UTMStack keeps raw logs for about a day.",
@@ -197,6 +215,12 @@
     "A report for the last 24 hours, ready in seconds."
    ]
   ]
+ },
+ {
+  "img": "21-report",
+  "title": "Reports ready for management",
+  "text": "Every report carries the logo and the copyright notice on each page, opens with key figures and plain-language key findings, then covers alerts, blocked attackers and the ports they tried, and who connected to whom.",
+  "spots": []
  },
  {
   "img": "16-edit-layout",

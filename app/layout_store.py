@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Victor Beitner. All rights reserved. See LICENSE.
 """Shared dashboard layout: widget catalogue, validation and storage (no HTTP here).
 
 Layout JSON (schema 1):

@@ -12,7 +12,7 @@ import urllib.error, urllib.request
 from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-VERSION = "1.12.0"
+VERSION = "1.13.0"
 HERE = os.path.dirname(os.path.abspath(__file__))
 if HERE not in sys.path:                          # the container runs "python3 -I", which leaves this folder off sys.path
     sys.path.insert(0, HERE)
@@ -1236,15 +1236,13 @@ def _remote_aggs(side):
 
 
 def net_counts(ip_buckets):
-    """VPN/Tor and hosting connection counts among an arc's busiest remote addresses."""
-    vpn = hosting = 0
+    """VPN, Tor and hosting connection counts among an arc's busiest remote addresses."""
+    n = {"vpn": 0, "tor": 0, "hosting": 0}
     for b in ip_buckets:
         kind = GEO.net_kind(_q(b["key"]))
-        if kind in ("vpn", "tor"):
-            vpn += b["doc_count"]
-        elif kind == "hosting":
-            hosting += b["doc_count"]
-    return vpn, hosting
+        if kind:
+            n[kind] += b["doc_count"]
+    return n
 
 
 def _outcomes(buckets):
@@ -1346,10 +1344,10 @@ def build_net_geo(window, dtype):
                         continue
                     d, _ = _outcomes(cityb["out"]["buckets"])
                     name = cityb["country"]["buckets"][0]["key"] if cityb["country"]["buckets"] else cc
-                    vpn, hosting = net_counts(cityb.get("ip", {}).get("buckets", []))
-                    arcs.append({"site": site, "dir": direction, "cc": cc, "country": _q(name), "city": _q(cityb["key"]),
-                                 "lat": round(lat, 3), "lon": round(lon, 3), "count": cityb["doc_count"], "denied": d,
-                                 "vpn": vpn, "hosting": hosting})
+                    arc = {"site": site, "dir": direction, "cc": cc, "country": _q(name), "city": _q(cityb["key"]),
+                           "lat": round(lat, 3), "lon": round(lon, 3), "count": cityb["doc_count"], "denied": d}
+                    arc.update(net_counts(cityb.get("ip", {}).get("buckets", [])))
+                    arcs.append(arc)
                     c = countries.setdefault(cc, {"cc": cc, "country": _q(name), "count": 0, "denied": 0, "in": 0, "out": 0})
                     c["count"] += cityb["doc_count"]; c["denied"] += d; c[direction] += cityb["doc_count"]
 
@@ -1474,13 +1472,11 @@ def add_attackers(g, window, dtype):
         if not a:
             a = arcs[key] = {"site": r["site"], "dir": "in", "cc": loc["cc"], "country": loc["country"], "city": loc["city"],
                              "lat": round(loc["lat"], 3), "lon": round(loc["lon"], 3), "count": 0, "denied": 0,
-                             "vpn": 0, "hosting": 0}
+                             "vpn": 0, "tor": 0, "hosting": 0}
             g["arcs"].append(a)
         a["count"] += r["count"]; a["denied"] += r["blocked"]
-        if loc.get("net") in ("vpn", "tor"):
-            a["vpn"] = a.get("vpn", 0) + r["count"]
-        elif loc.get("net") == "hosting":
-            a["hosting"] = a.get("hosting", 0) + r["count"]
+        if loc.get("net"):
+            a[loc["net"]] = a.get(loc["net"], 0) + r["count"]
         c = countries.setdefault(loc["cc"], {"cc": loc["cc"], "country": loc["country"], "count": 0, "denied": 0, "in": 0, "out": 0})
         c["count"] += r["count"]; c["denied"] += r["blocked"]; c["in"] += r["count"]
     for x in ticker:

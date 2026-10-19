@@ -169,7 +169,7 @@ class GeoMap(unittest.TestCase):
         kinds = {"1.1.1.1": "vpn", "2.2.2.2": "tor", "3.3.3.3": "hosting"}
         self.s.GEO.net_kind = lambda ip: kinds.get(ip)
         b = [{"key": ip, "doc_count": n} for ip, n in (("1.1.1.1", 5), ("2.2.2.2", 3), ("3.3.3.3", 7), ("4.4.4.4", 9))]
-        self.assertEqual(self.s.net_counts(b), (8, 7))
+        self.assertEqual(self.s.net_counts(b), {"vpn": 5, "tor": 3, "hosting": 7})
 
     def test_same_attempt_logged_twice_shows_once(self):
         hits = [{"_source": {"@timestamp": "2026-10-18T20:00:00Z", "dataSource": "10.0.2.3", "log": {"message": m}}}

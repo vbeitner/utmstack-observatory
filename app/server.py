@@ -7,12 +7,12 @@ aggregates in a local SQLite file. Python standard library only.
 Configuration is by environment variable (see README.md). Secrets can be given as NAME or as
 NAME_FILE (path to a file, e.g. a Docker secret under /run/secrets).
 """
-import base64, hmac, json, os, re, shutil, ssl, subprocess, sys, threading, time
+import base64, hashlib, hmac, json, os, re, shutil, socket, ssl, subprocess, sys, threading, time
 import urllib.error, urllib.request
 from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-VERSION = "1.15.0"
+VERSION = "1.16.0"
 HERE = os.path.dirname(os.path.abspath(__file__))
 if HERE not in sys.path:                          # the container runs "python3 -I", which leaves this folder off sys.path
     sys.path.insert(0, HERE)
@@ -48,7 +48,11 @@ HOST_NAME = env("HOST_NAME") or os.uname().nodename
 TRANSPORT = "http" if OS_URL else "docker-exec"
 REFRESH_S = 4
 REQUEST_TIMEOUT_S = float(env("REQUEST_TIMEOUT_S", "15"))
-MAX_CONNECTIONS = int(env("MAX_CONNECTIONS", "0") or "0")   # 0 = unlimited
+MAX_CONNECTIONS = int(env("MAX_CONNECTIONS", "64") or "0")   # 0 = unlimited
+MAX_CONNECTIONS_PER_IP = int(env("MAX_CONNECTIONS_PER_IP", "32") or "0")
+HEADER_DEADLINE_S = float(env("HEADER_DEADLINE_S", "10"))      # whole request line + headers, not per read
+ALLOWED_HOSTS = {h.strip().lower() for h in env("ALLOWED_HOSTS").split(",") if h.strip()}
+OS_CA_FILE = env("OS_CA_FILE")                  # verify OpenSearch's certificate against this CA (default: no check)
 DOCKER = ["sudo", "-n", "docker"]               # docker-exec transport only (bare-metal installs)
 
 
@@ -57,7 +61,51 @@ def current_dash_user():
 
 
 def current_dash_pass():
+    """The stored credential: a pbkdf2 hash when saved from the Settings panel, else the installer's password.
+    Only for "is a login configured?" checks -- compare passwords with check_password()."""
     return settings_store.get(DATA_DIR, "dash_pass") or DASH_PASS
+
+
+PBKDF2_ITER = 600_000
+_verified = {}                                   # hmac(pw) -> (stored credential, time); avoids a pbkdf2 per poll
+_VERIFY_KEY = os.urandom(32)
+VERIFY_TTL_S = 300
+
+
+def hash_password(pw):
+    salt = os.urandom(16)
+    dk = hashlib.pbkdf2_hmac("sha256", pw.encode(), salt, PBKDF2_ITER)
+    return "pbkdf2_sha256$%d$%s$%s" % (PBKDF2_ITER, salt.hex(), dk.hex())
+
+
+def check_password(pw):
+    stored = current_dash_pass()
+    if not stored:
+        return True
+    if not stored.startswith("pbkdf2_sha256$"):
+        return hmac.compare_digest(pw.encode(), stored.encode())
+    tag = hmac.new(_VERIFY_KEY, pw.encode(), "sha256").digest()
+    hit = _verified.get(tag)
+    if hit and hit[0] == stored and time.time() - hit[1] < VERIFY_TTL_S:
+        return True
+    try:
+        _, it, salt, want = stored.split("$")
+        ok = hmac.compare_digest(hashlib.pbkdf2_hmac("sha256", pw.encode(), bytes.fromhex(salt), int(it)).hex(), want)
+    except ValueError:
+        return False
+    if ok:
+        if len(_verified) > 64:
+            _verified.clear()
+        _verified[tag] = (stored, time.time())
+    return ok
+
+
+def migrate_plain_password():
+    """Settings saved by versions before 1.16 held the password in clear text; hash it in place."""
+    raw = settings_store.get(DATA_DIR, "dash_pass")
+    if raw and not raw.startswith("pbkdf2_sha256$"):
+        settings_store.save(DATA_DIR, {"dash_pass": hash_password(raw)})
+        print("settings: stored dashboard password converted to a pbkdf2 hash", flush=True)
 
 
 def current_abuseipdb_key():
@@ -76,9 +124,13 @@ def current_report_hour():
 
 _state = {"data": {"error": "starting"}, "cid": None}
 _lock = threading.Lock()
-_ctx = ssl.create_default_context()
-_ctx.check_hostname = False                     # OpenSearch inside UTMStack uses its own self-signed certificate
-_ctx.verify_mode = ssl.CERT_NONE
+if OS_CA_FILE:
+    _ctx = ssl.create_default_context(cafile=OS_CA_FILE)
+    _ctx.check_hostname = env("OS_CHECK_HOSTNAME", "1") == "1"
+else:
+    _ctx = ssl.create_default_context()
+    _ctx.check_hostname = False                 # OpenSearch inside UTMStack uses its own self-signed certificate
+    _ctx.verify_mode = ssl.CERT_NONE            # (set OS_CA_FILE to verify it)
 
 
 def sh(args, **kw):
@@ -101,6 +153,8 @@ def container_id():
 
 
 def _call_exec(path, body, method):
+    if not re.fullmatch(r"/[A-Za-z0-9_*.,/?=&:-]*", path) or method not in ("GET", "POST", "PUT"):
+        raise ValueError("refusing unexpected OpenSearch path")   # it goes into a shell string below
     # Password goes in on stdin, never on the command line: sudo logs command lines.
     cmd = DOCKER + ["exec", "-i", container_id(), "sh", "-c",
                     'read -r PW; curl -sk -m 25 -X %s -u "admin:$PW" -H "Content-Type: application/json" '
@@ -713,6 +767,14 @@ def api_source(name):
     }
 
 
+def _num(v, kind=float):
+    """Third-party and log values that the UI prints as numbers: a real number or None, never a string."""
+    try:
+        return kind(v) if v is not None and not isinstance(v, bool) else None
+    except (TypeError, ValueError):
+        return None
+
+
 def alert_ip_loc(*candidates):
     """Pick the first candidate dict (adversary / event origin / target, in caller's preference order) that has
     an ip, and return (ip, (lat, lon)) using that same dict's geolocation -- never mix an IP from one party with
@@ -721,7 +783,7 @@ def alert_ip_loc(*candidates):
         ip = c.get("ip")
         if ip:
             g = c.get("geolocation") or {}
-            return ip, (g.get("latitude"), g.get("longitude"))
+            return ip, (_num(g.get("latitude")), _num(g.get("longitude")))
     return "", (None, None)
 
 
@@ -748,6 +810,7 @@ def api_alerts(p):
         flt.append({"term": {"name.keyword": p["rule"][:300]}})
     if p.get("q"):
         flt.append({"simple_query_string": {"query": p["q"][:100], "default_operator": "and",
+                                            "flags": "AND|OR|NOT|PHRASE|PRECEDENCE|WHITESPACE|ESCAPE",
                                             "fields": ["name", "description", "dataSource", "dataType", "category", "technique"]}})
     size = max(1, min(100, int(p.get("size", 25))))
     frm = max(0, min(10000 - size, int(p.get("from", 0))))
@@ -881,6 +944,7 @@ def api_lag():
 # ---------------------------------------------------------------------------
 import ipaddress
 import urllib.request
+from urllib.parse import quote, urlencode
 
 _whois_cache = {}
 WHOIS_TTL_S = 86400
@@ -897,10 +961,18 @@ def _vcard(e):
     return out
 
 
-def api_whois(ip):
+def parse_ip(ip):
+    """A plain IPv4/IPv6 address, or None. Zone ids (fe80::1%eth0) are refused: they can carry ?&# into URLs."""
     try:
         addr = ipaddress.ip_address(ip.strip())
     except ValueError:
+        return None
+    return None if getattr(addr, "scope_id", None) else addr
+
+
+def api_whois(ip):
+    addr = parse_ip(ip)
+    if addr is None:
         return {"error": "not a valid IP address"}
     key = str(addr)
     hit = _whois_cache.get(key)
@@ -910,7 +982,7 @@ def api_whois(ip):
         res = {"ip": key, "private": True, "note": "Private, loopback or reserved address: it has no public WHOIS record."}
         _whois_cache[key] = (time.time(), res)
         return res
-    req = urllib.request.Request("https://rdap.org/ip/" + key, headers={"Accept": "application/rdap+json", "User-Agent": "utmstack-observatory/1.0"})
+    req = urllib.request.Request("https://rdap.org/ip/" + quote(key, safe=":."), headers={"Accept": "application/rdap+json", "User-Agent": "utmstack-observatory/1.0"})
     try:
         with urllib.request.urlopen(req, timeout=10) as r:
             d = json.loads(r.read(400_000))
@@ -954,15 +1026,15 @@ def _abuseipdb(ip):
     if not key:
         return {"configured": False}
     req = urllib.request.Request(
-        "https://api.abuseipdb.com/api/v2/check?ipAddress=%s&maxAgeInDays=90" % ip,
+        "https://api.abuseipdb.com/api/v2/check?" + urlencode({"ipAddress": ip, "maxAgeInDays": 90}),
         headers={"Key": key, "Accept": "application/json", "User-Agent": "utmstack-observatory/1.0"})
     try:
         with urllib.request.urlopen(req, timeout=10) as r:
             d = json.loads(r.read(200_000))["data"]
     except Exception as e:
         return {"configured": True, "error": "AbuseIPDB lookup failed: %s" % str(e)[:120]}
-    return {"configured": True, "score": d.get("abuseConfidenceScore"), "reports": d.get("totalReports"),
-            "distinct_reporters": d.get("numDistinctUsers"), "last_reported": d.get("lastReportedAt"),
+    return {"configured": True, "score": _num(d.get("abuseConfidenceScore"), int), "reports": _num(d.get("totalReports"), int),
+            "distinct_reporters": _num(d.get("numDistinctUsers"), int), "last_reported": d.get("lastReportedAt"),
             "usage_type": d.get("usageType"), "isp": d.get("isp"), "domain": d.get("domain"),
             "whitelisted": d.get("isWhitelisted")}
 
@@ -971,7 +1043,7 @@ def _virustotal(ip):
     key = current_virustotal_key()
     if not key:
         return {"configured": False}
-    req = urllib.request.Request("https://www.virustotal.com/api/v3/ip_addresses/%s" % ip,
+    req = urllib.request.Request("https://www.virustotal.com/api/v3/ip_addresses/%s" % quote(ip, safe=":."),
                                   headers={"x-apikey": key, "User-Agent": "utmstack-observatory/1.0"})
     try:
         with urllib.request.urlopen(req, timeout=10) as r:
@@ -980,16 +1052,15 @@ def _virustotal(ip):
         return {"configured": True, "error": "VirusTotal lookup failed: %s" % str(e)[:120]}
     stats = a.get("last_analysis_stats") or {}
     flagged = [v.get("result") for v in (a.get("last_analysis_results") or {}).values() if v.get("category") == "malicious"]
-    return {"configured": True, "malicious": stats.get("malicious", 0), "suspicious": stats.get("suspicious", 0),
-            "harmless": stats.get("harmless", 0), "undetected": stats.get("undetected", 0),
-            "reputation": a.get("reputation"), "as_owner": a.get("as_owner"), "country": a.get("country"),
+    return {"configured": True, "malicious": _num(stats.get("malicious", 0), int) or 0,
+            "suspicious": _num(stats.get("suspicious", 0), int) or 0, "harmless": _num(stats.get("harmless", 0), int) or 0,
+            "undetected": _num(stats.get("undetected", 0), int) or 0, "reputation": _num(a.get("reputation"), int), "as_owner": a.get("as_owner"), "country": a.get("country"),
             "flagged_by": [x for x in flagged if x][:8]}
 
 
 def api_reputation(ip):
-    try:
-        addr = ipaddress.ip_address(ip.strip())
-    except ValueError:
+    addr = parse_ip(ip)
+    if addr is None:
         return {"error": "not a valid IP address"}
     key = str(addr)
     hit = _reputation_cache.get(key)
@@ -1608,6 +1679,14 @@ _logins = {}                                     # ip -> {"fails": [t, ...], "un
 _logins_lock = threading.Lock()
 
 
+def client_error(where, e):
+    """Log the real exception, give the browser a short message and an id to find it in the logs."""
+    ref = os.urandom(3).hex()
+    print("error %s in %s: %s: %s" % (ref, where, type(e).__name__, str(e)[:500]), flush=True)
+    msg = str(e) if isinstance(e, (RuntimeError, ValueError)) and str(e)[:1].isupper() else "internal error"
+    return {"error": "%s (ref %s)" % (msg[:160], ref)}
+
+
 def login_attempt(ip, check):
     """Run the (microsecond) password check and the failure bookkeeping as one atomic step per server, so parallel
     guesses are serialised: after LOGIN_MAX_FAILURES wrong ones the address is locked, even for the right password.
@@ -1648,12 +1727,15 @@ def api_settings():
     return state
 
 
+SENSITIVE_SETTINGS = {"dash_user", "dash_pass", "abuseipdb_key", "virustotal_key", "support"}
+
+
 def validate_settings_patch(patch):
     """Reject values that would be silently useless or dangerous; settings_store.save() only checks shape/size."""
     if "dash_user" in patch and not patch["dash_user"].strip():
         raise ValueError("the dashboard username cannot be empty")
-    if "dash_pass" in patch and len(patch["dash_pass"]) < 8:
-        raise ValueError("the dashboard password must be at least 8 characters")
+    if "dash_pass" in patch and len(patch["dash_pass"]) < 12:
+        raise ValueError("the dashboard password must be at least 12 characters")
     if patch.get("home") and not parse_loc(patch["home"]):
         raise ValueError("home must be 'lat,lon[,city]'")
     if patch.get("sites"):
@@ -1673,6 +1755,48 @@ def validate_settings_patch(patch):
             raise ValueError("report_hour must be 0-23")
 
 
+class _Watchdog:
+    """Closes connections that have not delivered a complete request line + headers within HEADER_DEADLINE_S.
+    The socket timeout alone is per read, so a client trickling one header line every few seconds would hold a
+    thread forever (slowloris)."""
+    def __init__(self):
+        self._lock, self._due = threading.Lock(), {}
+        threading.Thread(target=self._run, daemon=True).start()
+
+    def arm(self, sock):
+        with self._lock:
+            self._due[sock] = time.time() + HEADER_DEADLINE_S
+
+    def disarm(self, sock):
+        with self._lock:
+            self._due.pop(sock, None)
+
+    def _run(self):
+        while True:
+            time.sleep(1)
+            now = time.time()
+            with self._lock:
+                late = [k for k, t in self._due.items() if t < now]
+                for k in late:
+                    del self._due[k]
+            for k in late:
+                try:
+                    k.shutdown(socket.SHUT_RDWR)
+                except OSError:
+                    pass
+
+
+WATCHDOG = _Watchdog()
+
+
+def host_ok(host):
+    """With no login configured the server only listens on localhost; refuse other Host names there, so a
+    DNS-rebinding page cannot reach it through the victim's browser."""
+    name = (host or "").strip().lower()
+    name = name[1:].split("]")[0] if name.startswith("[") else name.rsplit(":", 1)[0] if name.count(":") == 1 else name
+    return name in {"localhost", "127.0.0.1", "::1"} | ALLOWED_HOSTS
+
+
 class Handler(BaseHTTPRequestHandler):
     server_version = "UTMStack-Observatory"     # no Python / BaseHTTP version in the Server header
     sys_version = ""
@@ -1680,6 +1804,18 @@ class Handler(BaseHTTPRequestHandler):
 
     def log_message(self, *a):
         pass
+
+    def handle_one_request(self):
+        WATCHDOG.arm(self.connection)
+        try:
+            super().handle_one_request()
+        finally:
+            WATCHDOG.disarm(self.connection)
+
+    def parse_request(self):
+        ok = super().parse_request()
+        WATCHDOG.disarm(self.connection)        # headers are in; the body has its own Content-Length limits
+        return ok
 
     def setup(self):
         """Do the TLS handshake here, in this connection's own thread — not on the listening socket, which
@@ -1690,28 +1826,55 @@ class Handler(BaseHTTPRequestHandler):
             self.request = ctx.wrap_socket(self.request, server_side=True)
         super().setup()
 
+    def send_error(self, code, message=None, explain=None):
+        """Python's own error pages (bad request line, unknown method) get the same headers as everything else."""
+        self.close_connection = True
+        if self.request_version == "HTTP/0.9":     # a garbled request line: answer as HTTP/1.0 so headers go out
+            self.request_version = "HTTP/1.0"
+        text = (message or self.responses.get(code, ("Error",))[0])[:200]
+        self.send(code, "text/plain; charset=utf-8", text.encode("utf-8", "replace"),
+                  {"Allow": "GET, PUT, POST"} if code in (405, 501) else None)
+
+    def _method_not_allowed(self):
+        self.send(405, "text/plain", b"method not allowed", {"Allow": "GET, PUT, POST"})
+
+    do_DELETE = do_PATCH = do_OPTIONS = do_TRACE = do_CONNECT = _method_not_allowed
+
+    def do_HEAD(self):
+        self._head_only = True
+        self.do_GET()
+
     def send(self, code, ctype, body, extra=None):
+        head_only, self._head_only = getattr(self, "_head_only", False), False
         self.send_response(code)
         self.send_header("Content-Type", ctype)
         self.send_header("Cache-Control", (extra or {}).pop("Cache-Control", "no-store"))
         self.send_header("X-Content-Type-Options", "nosniff")
         self.send_header("X-Frame-Options", "DENY")
         self.send_header("Referrer-Policy", "no-referrer")
-        self.send_header("Content-Security-Policy", "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; "
+        self.send_header("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; "
                          "img-src 'self' data: blob: %s; connect-src 'self' %s; worker-src blob:; child-src blob:; "
-                         "frame-ancestors 'none'; base-uri 'none'; form-action 'none'" % (TILE_HOST, TILE_HOST))
+                         "object-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'" % (TILE_HOST, TILE_HOST))
+        self.send_header("Permissions-Policy", "camera=(), microphone=(), geolocation=(), payment=(), usb=(), interest-cohort=()")
+        self.send_header("Cross-Origin-Opener-Policy", "same-origin")
+        self.send_header("Cross-Origin-Resource-Policy", "same-origin")
         if isinstance(self.connection, ssl.SSLSocket):
             self.send_header("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
         for k, v in (extra or {}).items():
             self.send_header(k, v)
+        self.send_header("Content-Length", str(len(body)))
         self.end_headers()
-        self.wfile.write(body)
+        if not head_only:
+            self.wfile.write(body)
 
     def gate(self):
         """Authenticate the request with a per-IP lockout. Sends the 401/429 itself; returns True when allowed.
         Requests without credentials (a browser's first try) do not count as failures."""
         if not current_dash_pass():
-            return True
+            if host_ok(self.headers.get("Host")):
+                return True
+            self.send(403, "text/plain", b"This dashboard has no login and only answers to localhost.")
+            return False
         ip = self.client_address[0]
         has_creds = bool(self.headers.get("Authorization"))
         if has_creds:
@@ -1738,7 +1901,7 @@ class Handler(BaseHTTPRequestHandler):
             except Exception:
                 return False
             ok_u = hmac.compare_digest(user.encode(), current_dash_user().encode())
-            ok_p = hmac.compare_digest(pw.encode(), current_dash_pass().encode())
+            ok_p = check_password(pw)
             return ok_u and ok_p
         return False
 
@@ -1779,16 +1942,16 @@ class Handler(BaseHTTPRequestHandler):
             try:
                 body = json.dumps(compute_history()).encode()
             except Exception as e:
-                body = json.dumps({"error": str(e)[:200]}).encode()
+                body = json.dumps(client_error(u.path, e)).encode()
             self.send(200, "application/json", body)
         elif u.path in routes:
             try:
                 body = json.dumps(routes[u.path]()).encode()
             except Exception as e:  # report to the UI instead of dropping the connection
-                body = json.dumps({"error": str(e)[:300]}).encode()
+                body = json.dumps(client_error(u.path, e)).encode()
             self.send(200, "application/json", body)
-        elif u.path == "/layout.js":
-            with open(os.path.join(HERE, "layout.js"), "rb") as f:
+        elif u.path in ("/layout.js", "/app.js"):
+            with open(os.path.join(HERE, u.path[1:]), "rb") as f:
                 self.send(200, "text/javascript; charset=utf-8", f.read())
         elif u.path == "/api/layout":
             lay, notes = layout_store.load_with_notes(DATA_DIR)
@@ -1845,11 +2008,26 @@ class Handler(BaseHTTPRequestHandler):
                         self.send(409, "application/json", json.dumps({"error": "conflict", "layout": current}).encode())
                         return
                     saved = layout_store.save(DATA_DIR, req.get("layout"))
+                print("audit: shared layout saved by %s" % self.client_address[0], flush=True)
                 self.send(200, "application/json", json.dumps({"layout": saved}).encode())
             else:
+                cur = req.pop("current_password", "")
+                same = {"dash_user": current_dash_user(), "support": settings_store.get(DATA_DIR, "support", env("SUPPORT_CONTACT")) or ""}
+                changed = {k for k in SENSITIVE_SETTINGS & set(req) if k not in same or req[k] != same[k]}
+                if changed and current_dash_pass():
+                    ok, wait = login_attempt(self.client_address[0], lambda: isinstance(cur, str) and check_password(cur))
+                    if not ok:
+                        print("audit: settings change refused for %s (wrong current password)" % self.client_address[0], flush=True)
+                        self.send(429 if wait else 403, "application/json", json.dumps(
+                            {"error": "too many wrong passwords, try again later" if wait else
+                             "enter your current password to change the login, API keys or support contact"}).encode())
+                        return
                 with _settings_lock:
                     validate_settings_patch(req)
+                    if req.get("dash_pass"):
+                        req["dash_pass"] = hash_password(req["dash_pass"])
                     settings_store.save(DATA_DIR, req)
+                print("audit: settings changed by %s: %s" % (self.client_address[0], ", ".join(sorted(req)) or "-"), flush=True)
                 self.send(200, "application/json", json.dumps(settings_store.public_state(DATA_DIR)).encode())
         except ValueError as e:
             self.send(400, "application/json", json.dumps({"error": str(e)[:200]}).encode())
@@ -1882,20 +2060,30 @@ class Handler(BaseHTTPRequestHandler):
             meta = generate_report(hours)
             self.send(200, "application/json", json.dumps(meta).encode())
         except Exception as e:
-            self.send(500, "application/json", json.dumps({"error": str(e)[:300]}).encode())
+            self.send(500, "application/json", json.dumps(client_error(u.path, e)).encode())
 
 
 class Server(ThreadingHTTPServer):
     """Caps concurrent connections instead of spawning an unbounded thread per accept. tls_context, when set,
     is applied per-connection by Handler.setup() rather than to the listening socket (see setup() for why)."""
     tls_context = None
+    request_queue_size = 128                     # socketserver's default listen backlog of 5 resets bursts of clients
 
     def __init__(self, *a, **kw):
         super().__init__(*a, **kw)
         self._conn_slots = threading.Semaphore(MAX_CONNECTIONS) if MAX_CONNECTIONS else None
+        self._per_ip, self._per_ip_lock, self._owner = {}, threading.Lock(), {}
 
     def process_request(self, request, client_address):
-        if self._conn_slots is not None and not self._conn_slots.acquire(blocking=False):
+        ip = client_address[0] if isinstance(client_address, tuple) else ""
+        with self._per_ip_lock:
+            busy = MAX_CONNECTIONS_PER_IP and self._per_ip.get(ip, 0) >= MAX_CONNECTIONS_PER_IP
+            if not busy:
+                self._per_ip[ip] = self._per_ip.get(ip, 0) + 1
+                self._owner[id(request)] = ip
+        if busy or (self._conn_slots is not None and not self._conn_slots.acquire(blocking=False)):
+            if not busy:
+                self._release_ip(request)
             try:
                 request.close()
             except OSError:
@@ -1903,9 +2091,21 @@ class Server(ThreadingHTTPServer):
             return
         super().process_request(request, client_address)
 
+    def _release_ip(self, request):
+        with self._per_ip_lock:
+            ip = self._owner.pop(id(request), None)
+            if ip is not None:
+                n = self._per_ip.get(ip, 1) - 1
+                if n > 0:
+                    self._per_ip[ip] = n
+                else:
+                    self._per_ip.pop(ip, None)
+
     def shutdown_request(self, request):
         super().shutdown_request(request)
-        if self._conn_slots is not None:
+        owned = id(request) in self._owner
+        self._release_ip(request)
+        if self._conn_slots is not None and owned:
             self._conn_slots.release()
 
 
@@ -1921,6 +2121,7 @@ if __name__ == "__main__":
     if not current_dash_pass() and BIND not in ("127.0.0.1", "localhost", "::1") and env("ALLOW_NO_AUTH") != "1":
         sys.exit("Refusing to listen on %s without a login. Set DASH_PASS (or DASH_PASS_FILE), "
                  "bind to 127.0.0.1, or set ALLOW_NO_AUTH=1." % BIND)
+    migrate_plain_password()
     threading.Thread(target=refresher, daemon=True).start()
     threading.Thread(target=history_loop, daemon=True).start()
     threading.Thread(target=lag_loop, daemon=True).start()

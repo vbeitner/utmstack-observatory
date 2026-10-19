@@ -16,6 +16,7 @@ import sqlite3
 import threading
 import time
 import urllib.request
+from urllib.parse import quote
 from datetime import datetime, timedelta, timezone
 
 try:
@@ -218,7 +219,7 @@ class GeoIP:
                         continue
                     self._used += 1
                     self.status["online_today"] = self._used
-                url = ONLINE_URL % ip + ("&key=" + self.online_key if self.online_key else "")
+                url = ONLINE_URL % quote(ip, safe=":.") + ("&key=" + quote(self.online_key, safe="") if self.online_key else "")
                 d = json.loads(self.fetch(url, timeout=15)).get(ip) or {}
                 rec = {"lat": d.get("latitude"), "lon": d.get("longitude"), "city": d.get("city") or "",
                        "country": d.get("country") or "", "cc": d.get("isocode") or "??", "src": "online",

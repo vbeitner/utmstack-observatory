@@ -1,5 +1,37 @@
 # Release notes
 
+## 1.16.0 — 2026-10-19
+
+**For users**
+- **Security update.** A full security assessment was done; the report is in `docs/security/SECURITY-ASSESSMENT.md`.
+  No critical or high issue was found, and the medium ones are fixed in this release.
+- **Settings panel:** changing the login, an API key or the support contact now asks for your **current password**
+  (new *Confirm* field at the bottom). New passwords need at least 12 characters.
+- **New installs use HTTPS** with a self-signed certificate (the browser warns once). Existing installs keep their
+  current setting; re-run the installer with `--tls` to switch.
+- `sudo ./install.sh password` now really sets a new password, even one changed in the Settings panel, so it can be
+  used to lock someone out. With no argument it generates a fresh one.
+- New **user manual** with screenshots and short clips (`docs/manual/USER-MANUAL.md`), a click-through **feature tour**
+  (`docs/tour/index.html`) and MP4 feature videos (`docs/media/video/`).
+- The map credit line is now a small fixed text in the corner of the street map, and the browser tab has an icon.
+
+**Technical**
+- Fixes OBS-02…OBS-07, OBS-10, OBS-12…OBS-14, OBS-17 and parts of OBS-01, OBS-09, OBS-11, OBS-15, OBS-16, OBS-18:
+  request-header deadline (`HEADER_DEADLINE_S`, 10 s) plus default connection caps (`MAX_CONNECTIONS=64`,
+  `MAX_CONNECTIONS_PER_IP=32`) and a 128 listen backlog; the page script moved to `/app.js` and the CSP dropped
+  `script-src 'unsafe-inline'` (added `object-src 'none'`, Permissions-Policy, COOP, CORP); MapLibre's attribution
+  control replaced by fixed text (GHSA-jrc7-96c5-q579); re-authentication and `audit:` log lines for settings changes;
+  PBKDF2-SHA256 (600k) for passwords saved in Settings, clear-text ones migrated at start-up; localhost-only `Host`
+  check without a login (DNS rebinding); IPv6 zone ids refused and lookup URLs encoded; third-party numbers coerced;
+  every error page and HEAD/OPTIONS/DELETE answer carries the security headers; generic error messages with a
+  reference id; `OS_CA_FILE` to verify OpenSearch; installer: TLS default for new installs, `--no-tls`,
+  `--password-file`, secrets mounted `uid=10001,mode=0400`, credentials to curl on stdin, Settings overrides cleared
+  when the installer sets the same value.
+- Image: Debian security updates applied at build, pip removed, `pillow>=12.3` pinned. Trivy: 0 fixable
+  vulnerabilities; pip-audit: none. Requirements now need Python 3.10+ outside the container.
+- Fixed the long-standing flaky `test_parallel_guessing_is_capped` (cause: socketserver's listen backlog of 5);
+  11 new tests in `tests/test_security_fixes.py`.
+
 ## 1.15.0 — 2026-10-18
 
 **For users**

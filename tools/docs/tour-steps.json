@@ -1,0 +1,241 @@
+[
+ {
+  "img": "01-overview",
+  "title": "One screen for the whole SIEM",
+  "text": "The Overview answers the daily questions in seconds: is every log source reporting, how busy is the SIEM, is anything being flagged, and are logs arriving on time.",
+  "spots": [
+   [
+    "#kSrcSec",
+    "Data sources",
+    "Sources that reported in the last 10 minutes. Silent sources are named here the moment they stop."
+   ],
+   [
+    "#kEvSec",
+    "Events",
+    "Events stored in the period, the change against the previous period and the peak rate."
+   ],
+   [
+    "#kAlSec",
+    "Alerts",
+    "Alerts by severity. Click for the filterable alert list."
+   ],
+   [
+    "#kLagSec",
+    "Ingest lag",
+    "How fresh the newest event is. Click for the delay per source."
+   ],
+   [
+    "#envBadge",
+    "SIEM health",
+    "UTMStack's own database health. Click for a plain-language explanation and the fix."
+   ],
+   [
+    "#rangeSeg",
+    "Time range",
+    "Live, 1 h, 6 h or 24 h for the counters, donut, rules and alert list."
+   ],
+   [
+    "#sideTabs",
+    "Alert rules",
+    "The rules raising the most alerts. Click one to open its alerts."
+   ]
+  ]
+ },
+ {
+  "img": "02-live-map",
+  "title": "Live map of firewall traffic and attacks",
+  "text": "Every connection the firewalls log is drawn as an arc to the remote city. Attackers found in server and Microsoft 365 logs are plotted too. Red is blocked, yellow is VPN, purple is Tor.",
+  "spots": [
+   [
+    "#mapWin",
+    "Window",
+    "Draw the last 1, 5 or 15 minutes."
+   ],
+   [
+    "#mapTypeSeg",
+    "Source",
+    "Firewall, Microsoft 365, Google, Windows, Linux or syslog, or everything at once."
+   ],
+   [
+    "#mapDirSeg",
+    "Direction",
+    "Inbound, outbound or both."
+   ],
+   [
+    "#mapOutSeg",
+    "Outcome",
+    "Only allowed or only denied traffic."
+   ],
+   [
+    "#mapNetSeg",
+    "Network",
+    "Isolate traffic from VPN ranges, Tor exit nodes or hosting providers."
+   ],
+   [
+    "#mapPortForm",
+    "Port",
+    "Type 22, 3389 or any port to see where that traffic comes from and goes to."
+   ],
+   [
+    "#mapTicker",
+    "Blocked ticker",
+    "The newest blocked connections, with VPN, Tor and hosting badges. Hover a row to find it on the map."
+   ]
+  ]
+ },
+ {
+  "img": "03-map-tor",
+  "title": "Tor and VPN traffic at a glance",
+  "text": "Address lists for VPN providers, datacenters and Tor exit nodes are downloaded and refreshed automatically, so anonymised traffic stands out in its own colour.",
+  "spots": []
+ },
+ {
+  "img": "04-map-port-22",
+  "title": "Who is knocking on port 22?",
+  "text": "A port filter turns the map into an exposure check: every SSH attempt in the last minute, where it came from and which site it targeted.",
+  "spots": []
+ },
+ {
+  "img": "05-map-street-zoom",
+  "title": "Street-level context",
+  "text": "Zoom in and a street map appears beneath the arcs. IP location is city-level, so this adds context rather than pinpointing a building.",
+  "spots": []
+ },
+ {
+  "img": "07-alerts-for-rule",
+  "title": "From a rule to its alerts in one click",
+  "text": "Filter alerts by severity, source, rule or free text, and page through the history.",
+  "spots": [
+   [
+    "#fSev",
+    "Severity",
+    "High, Medium or Low."
+   ],
+   [
+    "#fSrc",
+    "Source",
+    "One data source or all of them."
+   ],
+   [
+    "#fRule",
+    "Rule",
+    "One alert rule."
+   ],
+   [
+    "#fQ",
+    "Search",
+    "Free text across alert names, descriptions and addresses."
+   ]
+  ]
+ },
+ {
+  "img": "08-alert-detail",
+  "title": "Alert detail with a recommended action",
+  "text": "Each alert explains what happened and what to do, in plain language, with every stored field, live IP reputation from AbuseIPDB and VirusTotal, and WHOIS for each public address.",
+  "spots": [
+   [
+    "#digTitle",
+    "The alert",
+    "Rule, severity, status, MITRE ATT&CK technique and the affected site."
+   ]
+  ]
+ },
+ {
+  "img": "09-data-sources",
+  "title": "Every data source, and when it last reported",
+  "text": "Event counts, share, a 24-hour sparkline and status per source. Switch to By type to compare firewalls, servers and cloud.",
+  "spots": []
+ },
+ {
+  "img": "10-source-detail",
+  "title": "One source in depth",
+  "text": "Event history, the alerts the source raised and its most recent raw events.",
+  "spots": []
+ },
+ {
+  "img": "11-ingest-lag",
+  "title": "Are logs arriving on time?",
+  "text": "The delay between a device logging an event and UTMStack storing it, per source, with an explanation of what is normal.",
+  "spots": []
+ },
+ {
+  "img": "12-cluster-health",
+  "title": "SIEM health in plain language",
+  "text": "When OpenSearch turns yellow or red, the panel says whether data is at risk, why, and the exact commands that fix it. Copy diagnostics gives your support provider everything at once.",
+  "spots": []
+ },
+ {
+  "img": "13-trends",
+  "title": "30 days of history",
+  "text": "Hourly history and daily and weekly comparisons, kept in the dashboard's own database because UTMStack keeps raw logs for about a day.",
+  "spots": [
+   [
+    "#histMetric",
+    "Metric",
+    "Events, alerts or AI traffic."
+   ],
+   [
+    "#dailyCmp",
+    "Daily comparison",
+    "Last 24 hours against the 24 before."
+   ],
+   [
+    "#weeklyCmp",
+    "Weekly comparison",
+    "Last 7 days against the 7 before."
+   ]
+  ]
+ },
+ {
+  "img": "14-reports",
+  "title": "Reports for management",
+  "text": "PDF and HTML reports on demand or every day: key figures, top rules, recent alerts with MITRE ATT&CK techniques, top blocked countries and storage health.",
+  "spots": [
+   [
+    "#repGenerate",
+    "Generate now",
+    "A report for the last 24 hours, ready in seconds."
+   ]
+  ]
+ },
+ {
+  "img": "16-edit-layout",
+  "title": "Your layout, your screens",
+  "text": "Move and resize panels, add widgets and screens, and choose which screens rotate on the NOC wall. Save a layout as everyone's default, or keep it personal.",
+  "spots": [
+   [
+    "#addWidgetBtn",
+    "Add widget",
+    "Choose from the widget catalogue."
+   ],
+   [
+    "#addScreenBtn",
+    "Add screen",
+    "A new tab with its own layout."
+   ],
+   [
+    "#wallScreenBtn",
+    "On wall",
+    "Include this screen in Wall-mode rotation."
+   ],
+   [
+    ".w-drag",
+    "Move",
+    "Drag a panel by its handle."
+   ]
+  ]
+ },
+ {
+  "img": "15-settings",
+  "title": "Settings without a restart",
+  "text": "Login, reputation API keys, support contact, map locations, AI-traffic hosts and the report schedule. Keys are write-only and never shown again.",
+  "spots": []
+ },
+ {
+  "img": "18-mobile-overview",
+  "title": "Works on a phone",
+  "mobile": true,
+  "text": "Panels stack on a small screen, and the map supports touch zoom and pan.",
+  "spots": []
+ }
+]

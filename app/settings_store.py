@@ -77,3 +77,20 @@ def public_state(data_dir):
     for k in SECRET_KEYS:
         out[k + "_configured"] = bool(d.get(k))
     return out
+
+
+if __name__ == "__main__":          # install.sh: `python3 -I settings_store.py DATA_DIR --clear dash_pass ...`
+    import sys
+    if len(sys.argv) < 4 or sys.argv[2] != "--clear":
+        sys.exit("usage: settings_store.py DATA_DIR --clear KEY [KEY ...]")
+    data_dir, keys = sys.argv[1], [k for k in sys.argv[3:] if k in KEYS]
+    d = dict(load(data_dir))
+    gone = [k for k in keys if k in d]
+    if gone:
+        for k in gone:
+            del d[k]
+        fd, tmp = tempfile.mkstemp(dir=data_dir, prefix=".settings-")
+        with os.fdopen(fd, "w") as f:
+            f.write(json.dumps(d, separators=(",", ":")))
+        os.replace(tmp, os.path.join(data_dir, FILE))
+    print("cleared: %s" % (", ".join(gone) or "nothing to clear"))

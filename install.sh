@@ -9,7 +9,9 @@
 #   sudo ./install.sh uninstall [--purge]     --purge also deletes saved history, config and image
 #
 # Options: --port N (8765)  --user NAME (admin)  --password PW  --ai-hosts "name=ip,name=ip"
-#          --tls | --tls-cert F --tls-key F   --tz ZONE   --stack NAME   --import-history FILE
+#          --password-file F (read the password from a file instead of the command line)
+#          --tls | --tls-cert F --tls-key F | --no-tls   (new installs default to --tls)
+#          --tz ZONE   --stack NAME   --import-history FILE
 #          --sites "FirewallName=lat,lon,City;1.2.3.4=lat,lon"   --home "lat,lon,City"   (live map)
 #          --support "Name|email|phone|url"   (shown when the logo is clicked)
 #          --abuseipdb-key KEY   --virustotal-key KEY   (live IP reputation on alert detail)
@@ -33,20 +35,24 @@ case "${1:-}" in install|uninstall|status|logs|password) CMD="$1"; shift;; esac
 
 # defaults, overridden by the saved config from a previous install, then by flags
 PORT=8765; DASH_USER=admin; AI_HOSTS=""; TLS=0; TZ_NAME=""; STACK=""; SITES=""; HOME_LOC=""; SUPPORT=""
+DASH_USER_FLAG=0; ABUSEIPDB_FLAG=0; VIRUSTOTAL_FLAG=0
 TLS_CERT_SRC=""; TLS_KEY_SRC=""; NEW_PASS=""; IMPORT=""; PURGE=0; ABUSEIPDB_KEY=""; VIRUSTOTAL_KEY=""; PROXYCHECK_KEY=""; GEOIP_ONLINE_DAILY=100
+[ -f "$CONF" ] || TLS=1                          # new installs: HTTPS with a self-signed certificate unless --no-tls
 # shellcheck disable=SC1090
 [ -f "$CONF" ] && . "$CONF"
 [ "$CMD" = password ] && { NEW_PASS="${1:-}"; [ $# -gt 0 ] && shift; }
 while [ $# -gt 0 ]; do
   case "$1" in
-    --port) PORT="$2"; shift 2;;            --user) DASH_USER="$2"; shift 2;;
+    --port) PORT="$2"; shift 2;;            --user) DASH_USER="$2"; DASH_USER_FLAG=1; shift 2;;
     --password) NEW_PASS="$2"; shift 2;;    --ai-hosts) AI_HOSTS="$2"; shift 2;;
     --tls) TLS=1; shift;;                   --tls-cert) TLS=1; TLS_CERT_SRC="$2"; shift 2;;
+    --no-tls) TLS=0; TLS_CERT_SRC=""; TLS_KEY_SRC=""; shift;;
+    --password-file) [ -r "$2" ] || die "--password-file: cannot read $2"; NEW_PASS="$(head -n1 "$2")"; shift 2;;
     --tls-key) TLS=1; TLS_KEY_SRC="$2"; shift 2;;  --tz) TZ_NAME="$2"; shift 2;;
     --stack) STACK="$2"; shift 2;;          --import-history) IMPORT="$2"; shift 2;;
     --sites) SITES="$2"; shift 2;;          --home) HOME_LOC="$2"; shift 2;;
     --support) SUPPORT="$2"; shift 2;;
-    --abuseipdb-key) ABUSEIPDB_KEY="$2"; shift 2;;  --virustotal-key) VIRUSTOTAL_KEY="$2"; shift 2;;
+    --abuseipdb-key) ABUSEIPDB_KEY="$2"; ABUSEIPDB_FLAG=1; shift 2;;  --virustotal-key) VIRUSTOTAL_KEY="$2"; VIRUSTOTAL_FLAG=1; shift 2;;
     --proxycheck-key) PROXYCHECK_KEY="$2"; shift 2;;  --geoip-online-daily) GEOIP_ONLINE_DAILY="$2"; shift 2;;
     --purge) PURGE=1; shift;;               -h|--help) sed -n '2,16p' "$0"; exit 0;;
     *) die "unknown option: $1";;
@@ -127,9 +133,10 @@ mkdir -p "$CONF_DIR"; chmod 700 "$CONF_DIR"
 
 GENERATED=0
 if [ -n "$NEW_PASS" ]; then DASH_PASS="$NEW_PASS"
-elif [ -s "$PASS_FILE" ]; then DASH_PASS="$(cat "$PASS_FILE")"
+elif [ -s "$PASS_FILE" ] && [ "$CMD" != password ]; then DASH_PASS="$(cat "$PASS_FILE")"
 else DASH_PASS="$(head -c 24 /dev/urandom | base64 | tr -d '/+=\n' | cut -c1-20)"; GENERATED=1; fi
 [ "${#DASH_PASS}" -ge 8 ] || die "the dashboard password must be at least 8 characters"
+[ -z "$NEW_PASS" ] || [ "${#NEW_PASS}" -ge 12 ] || die "a new dashboard password must be at least 12 characters"
 printf '%s' "$DASH_PASS" > "$PASS_FILE"; chmod 600 "$PASS_FILE"
 
 CERT=""; KEY=""
@@ -163,35 +170,47 @@ if [ -n "$IMPORT" ]; then
     -c 'cp /in/history.db /data/history.db && chown 10001:10001 /data/history.db'
 fi
 
+# A login or key saved in the dashboard's Settings panel overrides the installer's. When the installer is told to
+# set one, the saved override is removed so the installer's value really takes effect (e.g. revoking a password).
+CLEAR=()
+{ [ -n "$NEW_PASS" ] || [ "$CMD" = password ]; } && CLEAR+=(dash_pass)
+[ "$DASH_USER_FLAG" = 1 ] && CLEAR+=(dash_user)
+[ "$ABUSEIPDB_FLAG" = 1 ] && CLEAR+=(abuseipdb_key)
+[ "$VIRUSTOTAL_FLAG" = 1 ] && CLEAR+=(virustotal_key)
+if [ "${#CLEAR[@]}" -gt 0 ]; then
+  docker run --rm --entrypoint python3 -v "$VOLUME:/data" "$IMAGE:$VERSION" -I /app/settings_store.py /data --clear "${CLEAR[@]}" \
+    | sed 's/^/    settings panel override /' || warn "could not clear the settings-panel override for: ${CLEAR[*]}"
+fi
+
 # ---------------------------------------------------------------- secrets + service
 TS="$(date +%s)"
 mksecret() { printf '%s' "$2" | docker secret create --label "$LABEL=1" "$1_$TS" - >/dev/null; }
 mkfilesecret() { docker secret create --label "$LABEL=1" "$1_$TS" "$2" >/dev/null; }
-SECRETS=(); mksecret observatory_dash_pass "$DASH_PASS"; SECRETS+=(--secret "source=observatory_dash_pass_$TS,target=dash_pass,mode=0444")
+SECRETS=(); mksecret observatory_dash_pass "$DASH_PASS"; SECRETS+=(--secret "source=observatory_dash_pass_$TS,target=dash_pass,uid=10001,mode=0400")
 ENVS=(--env "OS_URL=$SCHEME://$ES_HOST:$ES_PORT" --env "DASH_USER=$DASH_USER" --env "DASH_PASS_FILE=/run/secrets/dash_pass"
       --env "TZ=$TZ_NAME" --env "HOST_NAME=$(hostname)" --env "AI_HOSTS=$AI_HOSTS"
       --env "SITE_LOCATIONS=$SITES" --env "HOME_LOCATION=$HOME_LOC"
       --env "SUPPORT_CONTACT=$SUPPORT" --env "INSTALLED_AT=$(date -u +%Y-%m-%dT%H:%M:%SZ)")
 if [ -n "$ES_USER" ]; then
-  mksecret observatory_os_pass "$ES_PASS"; SECRETS+=(--secret "source=observatory_os_pass_$TS,target=os_pass,mode=0444")
+  mksecret observatory_os_pass "$ES_PASS"; SECRETS+=(--secret "source=observatory_os_pass_$TS,target=os_pass,uid=10001,mode=0400")
   ENVS+=(--env "OS_USER=$ES_USER" --env "OS_PASS_FILE=/run/secrets/os_pass")
 fi
 if [ "$TLS" = 1 ]; then
   mkfilesecret observatory_tls_cert "$CERT"; mkfilesecret observatory_tls_key "$KEY"
-  SECRETS+=(--secret "source=observatory_tls_cert_$TS,target=tls_cert,mode=0444" --secret "source=observatory_tls_key_$TS,target=tls_key,mode=0444")
+  SECRETS+=(--secret "source=observatory_tls_cert_$TS,target=tls_cert,uid=10001,mode=0400" --secret "source=observatory_tls_key_$TS,target=tls_key,uid=10001,mode=0400")
   ENVS+=(--env TLS_CERT=/run/secrets/tls_cert --env TLS_KEY=/run/secrets/tls_key)
 fi
 ENVS+=(--env "GEOIP_ONLINE_DAILY=$GEOIP_ONLINE_DAILY")
 if [ -n "$PROXYCHECK_KEY" ]; then
-  mksecret observatory_proxycheck_key "$PROXYCHECK_KEY"; SECRETS+=(--secret "source=observatory_proxycheck_key_$TS,target=proxycheck_key,mode=0444")
+  mksecret observatory_proxycheck_key "$PROXYCHECK_KEY"; SECRETS+=(--secret "source=observatory_proxycheck_key_$TS,target=proxycheck_key,uid=10001,mode=0400")
   ENVS+=(--env "PROXYCHECK_KEY_FILE=/run/secrets/proxycheck_key")
 fi
 if [ -n "$ABUSEIPDB_KEY" ]; then
-  mksecret observatory_abuseipdb_key "$ABUSEIPDB_KEY"; SECRETS+=(--secret "source=observatory_abuseipdb_key_$TS,target=abuseipdb_key,mode=0444")
+  mksecret observatory_abuseipdb_key "$ABUSEIPDB_KEY"; SECRETS+=(--secret "source=observatory_abuseipdb_key_$TS,target=abuseipdb_key,uid=10001,mode=0400")
   ENVS+=(--env "ABUSEIPDB_KEY_FILE=/run/secrets/abuseipdb_key")
 fi
 if [ -n "$VIRUSTOTAL_KEY" ]; then
-  mksecret observatory_virustotal_key "$VIRUSTOTAL_KEY"; SECRETS+=(--secret "source=observatory_virustotal_key_$TS,target=virustotal_key,mode=0444")
+  mksecret observatory_virustotal_key "$VIRUSTOTAL_KEY"; SECRETS+=(--secret "source=observatory_virustotal_key_$TS,target=virustotal_key,uid=10001,mode=0400")
   ENVS+=(--env "VIRUSTOTAL_KEY_FILE=/run/secrets/virustotal_key")
 fi
 MOUNTS=(--mount "type=volume,source=$VOLUME,target=/data" --mount "type=tmpfs,destination=/tmp")
@@ -223,7 +242,9 @@ for _ in $(seq 1 45); do
 done
 if [ "$ok" != 1 ]; then docker service logs --tail 30 "$SERVICE" 2>&1 || true; die "the dashboard did not come up; see the log above"; fi
 sleep 6
-auth="$(curl -sk -m 15 -o /dev/null -w '%{http_code}' -u "$DASH_USER:$DASH_PASS" "$sch://127.0.0.1:$PORT/api/data" || true)"
+# credentials go to curl on stdin (-K -), not on its command line where other users could see them in ps
+auth="$(printf 'user = "%s"\n' "$(printf '%s' "$DASH_USER:$DASH_PASS" | sed 's/[\\"]/\\&/g')" \
+  | curl -sk -m 15 -K - -o /dev/null -w '%{http_code}' "$sch://127.0.0.1:$PORT/api/data" || true)"
 [ "$auth" = 200 ] || warn "login check returned HTTP $auth"
 
 { printf 'PORT=%q\nDASH_USER=%q\nAI_HOSTS=%q\nTLS=%q\nTZ_NAME=%q\nSTACK=%q\nSITES=%q\nHOME_LOC=%q\nSUPPORT=%q\nABUSEIPDB_KEY=%q\nVIRUSTOTAL_KEY=%q\nPROXYCHECK_KEY=%q\nGEOIP_ONLINE_DAILY=%q\n' \
@@ -234,7 +255,8 @@ echo
 info "UTMStack Observatory $VERSION is running"
 for ip in $(hostname -I 2>/dev/null); do case "$ip" in 172.1[6-9].*|172.2*.*|172.3[01].*) ;; *) echo "    $sch://$ip:$PORT/";; esac; done
 echo "    user: $DASH_USER"
-if [ "$GENERATED" = 1 ] || [ -n "$NEW_PASS" ]; then echo "    password: $DASH_PASS"; else echo "    password: (unchanged; stored in $PASS_FILE)"; fi
+if [ "$GENERATED" = 1 ]; then echo "    password: $DASH_PASS   (shown once; also in $PASS_FILE)"
+elif [ -n "$NEW_PASS" ]; then echo "    password: (the one you set)"; else echo "    password: (unchanged; stored in $PASS_FILE)"; fi
 echo "    password file: $PASS_FILE    config: $CONF"
 [ "$TLS" = 1 ] || warn "plain HTTP: the login travels unencrypted. Use a trusted network/VPN, or re-run with --tls."
 echo "    The published port listens on all interfaces; restrict it with your firewall if needed."

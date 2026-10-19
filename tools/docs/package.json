@@ -1,0 +1,6 @@
+{
+  "name": "observatory-docs-tools",
+  "private": true,
+  "description": "Screenshots, clips, feature tour and PDFs for the Observatory manual",
+  "dependencies": { "playwright": "1.56.1" }
+}

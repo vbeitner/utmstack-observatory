@@ -212,7 +212,8 @@ class LivePasswordChange(unittest.TestCase):
         h = {"Content-Type": "application/json", "X-Observatory": "1",
              "Authorization": "Basic " + base64.b64encode(b"admin:initial-pw-123").decode()}
         r = urllib.request.Request(self.base + "/api/settings", method="PUT",
-                                   data=json.dumps({"dash_pass": "brand-new-password-1"}).encode(), headers=h)
+                                   data=json.dumps({"dash_pass": "brand-new-password-1",
+                                                    "current_password": "initial-pw-123"}).encode(), headers=h)
         with urllib.request.urlopen(r) as resp:
             self.assertEqual(resp.status, 200)
         self.assertEqual(self.get("/api/settings", "admin", "initial-pw-123"), 401)

@@ -82,7 +82,7 @@ AI_HOSTS = {"llm01": "10.10.0.21", "llm02": "10.10.0.22"}
 
 
 def rng(*key):
-    return random.Random(int(hashlib.sha256(repr(key).encode()).hexdigest()[:16], 16))
+    return random.Random(int(hashlib.sha256(repr(key).encode()).hexdigest()[:16], 16))  # nosec B311: repeatable fake data, not security
 
 
 def now_ms():
@@ -137,7 +137,7 @@ def alert_at(slot):
             next(s for s, t in SERVERS if t == dtype) if dtype != "linux" else "web01.example.lan")
     t = slot * ALERT_SLOT_S * 1000 + r.randrange(ALERT_SLOT_S * 1000)
     status = "Open" if t > now_ms() - 6 * 3600 * 1000 or r.random() < .6 else "Completed"
-    return {"id": str(uuid.UUID(hashlib.md5(("demo-alert-%d" % slot).encode()).hexdigest())), "t_ms": t, "t": iso(t),
+    return {"id": str(uuid.UUID(hashlib.md5(("demo-alert-%d" % slot).encode(), usedforsecurity=False).hexdigest())), "t_ms": t, "t": iso(t),
             "sev": sev, "name": name, "source": site, "type": dtype, "status": status, "ip": ip,
             "affected": 1 + r.randrange(3), "category": cat, "lat": city[3], "lon": city[4], "technique": tech,
             "city": city[0], "country": city[1], "cc": city[2], "port": 22 if dtype in ("syslog", "linux") else

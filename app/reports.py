@@ -79,6 +79,38 @@ def _trend_svg(trend, w=860, h=110):
 
 
 # --------------------------------------------------------------------------------------- HTML
+SERVICES = {20: "FTP data", 21: "FTP", 22: "SSH", 23: "Telnet", 25: "SMTP", 53: "DNS", 67: "DHCP", 80: "HTTP", 110: "POP3",
+            123: "NTP", 135: "MS RPC", 137: "NetBIOS", 139: "NetBIOS", 143: "IMAP", 161: "SNMP", 389: "LDAP", 443: "HTTPS",
+            445: "SMB", 465: "SMTPS", 500: "IPsec IKE", 514: "Syslog", 587: "SMTP submission", 993: "IMAPS", 995: "POP3S",
+            1194: "OpenVPN", 1433: "MS SQL", 1723: "PPTP", 1900: "SSDP", 3306: "MySQL", 3389: "RDP", 4500: "IPsec NAT-T",
+            5060: "SIP", 5061: "SIP TLS", 5353: "mDNS", 5432: "PostgreSQL", 5900: "VNC", 6881: "BitTorrent",
+            7680: "Windows Delivery Optimization", 8000: "HTTP alt", 8080: "HTTP proxy", 8443: "HTTPS alt",
+            9200: "OpenSearch", 11211: "Memcached", 27017: "MongoDB"}
+
+
+def service(port):
+    return SERVICES.get(port, "")
+
+
+def _port_label(port, proto=None):
+    if port is None:
+        return "-"
+    name = service(port)
+    return "%s%s%s" % (port, "/" + proto.lower() if proto else "", " (%s)" % name if name else "")
+
+
+def _ports(ports):
+    return ", ".join(_port_label(p) for p in ports or []) or "-"
+
+
+def _n(v):
+    return "{:,}".format(v) if isinstance(v, int) else str(v if v is not None else "-")
+
+
+def _net(v):
+    return {"vpn": "VPN", "tor": "Tor", "hosting": "Hosting"}.get(v or "", "")
+
+
 def render_html(data):
     e = html.escape
     k = data.get("kpi") or {}
@@ -135,6 +167,55 @@ def render_html(data):
                         (e(c.get("country") or c.get("cc", "")), c.get("count", 0), c.get("denied", 0)))
         rows.append("</table>")
 
+    con = data.get("connections")
+    if con:
+        rows.append("<h2>Denied connections — last %sh</h2><table class='kv'>"
+                    "<tr><td>Denied connections (all)</td><td>%s</td></tr>"
+                    "<tr><td>Inbound attempts from the internet</td><td>%s from %s addresses</td></tr>"
+                    "<tr><td>Late replies to your own connections (dropped, not attacks)</td><td>%s</td></tr></table>" %
+                    (e(str(con.get("hours", 24))), _n(con.get("denied_total")), _n(con.get("denied_inbound")),
+                     _n(con.get("attackers")), _n(con.get("denied_replies"))))
+        if con.get("denied_ports"):
+            rows.append("<h3>Ports attackers tried (denied)</h3><table><tr><th>Port</th><th>Service</th><th>Attempts</th><th>Attacker addresses</th></tr>")
+            for x in con["denied_ports"]:
+                rows.append("<tr><td>%s%s</td><td>%s</td><td>%s</td><td>%s</td></tr>" %
+                            (e(str(x["port"])), e("/" + x["proto"].lower() if x.get("proto") else ""), e(service(x["port"])),
+                             _n(x["count"]), _n(x["sources"])))
+            rows.append("</table>")
+        if con.get("top_attackers"):
+            rows.append("<h3>Top attackers</h3><table><tr><th>Address</th><th>Country</th><th>Network</th><th>Denied</th>"
+                        "<th>Ports used</th><th>Sites targeted</th></tr>")
+            for x in con["top_attackers"]:
+                rows.append("<tr><td>%s</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td></tr>" %
+                            (e(x["ip"]), e(x.get("country") or ""), e(_net(x.get("net"))), _n(x["count"]),
+                             e(_ports(x.get("ports"))), e(", ".join(x.get("sites") or []))))
+            rows.append("</table>")
+        rows.append("<h2>Successful connections — last %sh</h2><table class='kv'><tr><td>Allowed connections</td><td>%s</td></tr></table>" %
+                    (e(str(con.get("hours", 24))), _n(con.get("allowed_total"))))
+        if con.get("allowed_ports"):
+            rows.append("<h3>Ports in use</h3><table><tr><th>Port</th><th>Service</th><th>Connections</th><th>Sources</th><th>Destinations</th></tr>")
+            for x in con["allowed_ports"]:
+                rows.append("<tr><td>%s%s</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td></tr>" %
+                            (e(str(x["port"])), e("/" + x["proto"].lower() if x.get("proto") else ""), e(service(x["port"])),
+                             _n(x["count"]), _n(x["sources"]), _n(x["destinations"])))
+            rows.append("</table>")
+        if con.get("allowed_inbound"):
+            rows.append("<h3>Allowed in from the internet</h3><table><tr><th>From</th><th>Country</th><th>Site</th><th>To</th>"
+                        "<th>Ports</th><th>Connections</th></tr>")
+            for x in con["allowed_inbound"]:
+                rows.append("<tr><td>%s%s</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td></tr>" %
+                            (e(x["ip"]), e(" (" + _net(x["net"]) + ")" if x.get("net") else ""), e(x.get("country") or ""),
+                             e(x.get("site") or ""), e(", ".join(x.get("dst") or [])), e(_ports(x.get("ports"))), _n(x["count"])))
+            rows.append("</table>")
+        if con.get("allowed_flows"):
+            rows.append("<h3>Busiest connections — who to whom</h3><table><tr><th>From</th><th>To</th><th>Direction</th>"
+                        "<th>Ports</th><th>Firewall</th><th>Connections</th></tr>")
+            for x in con["allowed_flows"]:
+                rows.append("<tr><td>%s</td><td>%s%s</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td></tr>" %
+                            (e(x["src"]), e(x["dst"]), e(" (" + x["dst_country"] + ")" if x.get("dst_country") else ""),
+                             e(x.get("dir") or ""), e(_ports(x.get("ports"))), e(x.get("site") or ""), _n(x["count"])))
+            rows.append("</table>")
+
     cluster, res = data.get("cluster") or {}, data.get("resources") or {}
     if cluster or res:
         rows.append("<h2>OpenSearch &amp; host health</h2><table class='kv'>")
@@ -165,7 +246,7 @@ def render_html(data):
 <style>
 body{font:14px/1.5 -apple-system,Segoe UI,Arial,sans-serif;color:#1a1a1a;background:#fff;max-width:900px;margin:40px auto;padding:0 20px}
 h1{font-size:22px;margin-bottom:0} .sub{color:#666;margin-top:4px}
-h2{font-size:16px;border-bottom:2px solid #1a1a1a;padding-bottom:4px;margin-top:32px}
+h2{font-size:16px;border-bottom:2px solid #1a1a1a;padding-bottom:4px;margin-top:32px} h3{font-size:14px;margin:18px 0 4px}
 table{border-collapse:collapse;width:100%%;margin:10px 0 20px}
 table.kv td:first-child{color:#555;width:260px}
 th,td{border:1px solid #ddd;padding:6px 10px;text-align:left;font-size:13px}
@@ -206,6 +287,11 @@ def _trend_chart(pdf, trend, width=180, height=28):
 
 
 # --------------------------------------------------------------------------------------- PDF
+def _latin(text):
+    """fpdf's core fonts are Latin-1: keep accents, replace anything else (e.g. Türkiye stays, emoji go)."""
+    return text.encode("latin-1", "replace").decode("latin-1")
+
+
 def render_pdf(data):
     pdf = FPDF()
     pdf.set_margin(15)
@@ -289,6 +375,58 @@ def render_pdf(data):
             r = t.row(); r.cell("Country"); r.cell("Connections"); r.cell("Denied")
             for c in geo["countries"]:
                 r = t.row(); r.cell(c.get("country") or c.get("cc", "")); r.cell(str(c.get("count", 0))); r.cell(str(c.get("denied", 0)))
+
+    con = data.get("connections")
+    if con:
+        def h3(text):
+            pdf.ln(2)
+            pdf.set_font("helvetica", "B", 11)
+            pdf.cell(0, 7, text, new_x="LMARGIN", new_y="NEXT")
+            pdf.set_font("helvetica", "", 9)
+
+        def table(widths, head, body):
+            pdf.set_font("helvetica", "", 8.5)
+            with pdf.table(col_widths=widths, text_align="LEFT") as t:
+                r = t.row()
+                for c in head:
+                    r.cell(c)
+                for line in body:
+                    r = t.row()
+                    for c in line:
+                        r.cell(_latin(str(c)))
+            pdf.set_font("helvetica", "", 10)
+
+        h2("Denied connections - last %sh" % con.get("hours", 24))
+        kv_table([("Denied connections (all)", _n(con.get("denied_total"))),
+                  ("Inbound attempts from the internet", "%s from %s addresses" % (_n(con.get("denied_inbound")), _n(con.get("attackers")))),
+                  ("Late replies to your own connections", "%s (dropped, not attacks)" % _n(con.get("denied_replies")))])
+        if con.get("denied_ports"):
+            h3("Ports attackers tried (denied)")
+            table((30, 60, 40, 50), ("Port", "Service", "Attempts", "Attacker addresses"),
+                  [("%s%s" % (x["port"], "/" + x["proto"].lower() if x.get("proto") else ""), service(x["port"]) or "-",
+                    _n(x["count"]), _n(x["sources"])) for x in con["denied_ports"]])
+        if con.get("top_attackers"):
+            h3("Top attackers")
+            table((30, 24, 16, 18, 52, 40), ("Address", "Country", "Network", "Denied", "Ports used", "Sites targeted"),
+                  [(x["ip"], x.get("country") or "", _net(x.get("net")) or "-", _n(x["count"]), _ports(x.get("ports")),
+                    ", ".join(x.get("sites") or [])) for x in con["top_attackers"]])
+        h2("Successful connections - last %sh" % con.get("hours", 24))
+        kv_table([("Allowed connections", _n(con.get("allowed_total")))])
+        if con.get("allowed_ports"):
+            h3("Ports in use")
+            table((30, 60, 34, 28, 28), ("Port", "Service", "Connections", "Sources", "Destinations"),
+                  [("%s%s" % (x["port"], "/" + x["proto"].lower() if x.get("proto") else ""), service(x["port"]) or "-",
+                    _n(x["count"]), _n(x["sources"]), _n(x["destinations"])) for x in con["allowed_ports"]])
+        if con.get("allowed_inbound"):
+            h3("Allowed in from the internet")
+            table((32, 24, 34, 30, 40, 20), ("From", "Country", "Site", "To", "Ports", "Conns"),
+                  [(x["ip"] + (" (%s)" % _net(x["net"]) if x.get("net") else ""), x.get("country") or "", x.get("site") or "",
+                    ", ".join(x.get("dst") or []), _ports(x.get("ports")), _n(x["count"])) for x in con["allowed_inbound"]])
+        if con.get("allowed_flows"):
+            h3("Busiest connections - who to whom")
+            table((28, 38, 18, 40, 34, 22), ("From", "To", "Direction", "Ports", "Firewall", "Conns"),
+                  [(x["src"], x["dst"] + (" (%s)" % x["dst_country"] if x.get("dst_country") else ""), x.get("dir") or "",
+                    _ports(x.get("ports")), x.get("site") or "", _n(x["count"])) for x in con["allowed_flows"]])
 
     cluster, res = data.get("cluster") or {}, data.get("resources") or {}
     if cluster or res:

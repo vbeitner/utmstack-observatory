@@ -1,6 +1,6 @@
 # UTMStack Observatory — User Manual
 
-Version 1.16 · October 2026
+Version 1.16.2 · October 2026
 
 UTMStack Observatory is a read-only operations dashboard for a UTMStack v11 SIEM. It sits next to UTMStack, reads
 its OpenSearch data, and turns it into one screen a security team, an IT manager or a NOC wall can understand at a
@@ -169,6 +169,22 @@ Zoom in far enough and a street-level map appears underneath the arcs.
 
 ![Hovering blocked rows](../media/gif/blocked-row-zoom.gif)
 
+### Looking at one attacker
+
+**Click a row** in *Latest blocked / failed inbound* to open that address. Under **Activity from this address**
+you see what it did in the last 24 hours, across every site:
+
+- connections in total, how many were **denied** and how many were **allowed**, and when it was first and last seen;
+- **Ports tried**: each port it aimed at on your side, with its service name (22 SSH, 3389 RDP, 445 SMB…) and the
+  denied/allowed count. A yellow note appears if any connection on those ports was allowed, which is worth checking;
+- **Sites it reached** and the **addresses it targeted** behind them;
+- the firewall's own reason when it gives one (for example a failed VPN-portal login).
+
+Denied packets that come *from* a web or DNS port (443, 80, 53) *to* a random high port are almost always late
+replies to connections your own devices had already closed. They are counted separately as "late replies" and
+left out of the ports list, so the list shows only what was really tried. Reputation and WHOIS for the address
+follow below. On a wall screen the panel shows *Site A, Site B…* and no internal addresses.
+
 ### Where locations come from
 
 1. UTMStack's own GeoIP enrichment, when present in the log.
@@ -251,6 +267,15 @@ last 24 hours: key figures and trends, top alert rules and recent alerts (with t
 rule has one), top blocked countries from the map, and storage health.
 
 ![Reports](../media/screens/14-reports.jpg)
+
+Two sections cover the firewall traffic of the last 24 hours:
+
+- **Denied connections**: all denied connections, the inbound attempts from the internet (and from how many
+  addresses), the late replies that were dropped, the **ports attackers tried** with their service names, and the
+  **top attackers** with their country, VPN/Tor/hosting network, the ports each one used and the sites it targeted.
+- **Successful connections**: the **ports in use**, connections **allowed in from the internet** (who, from where,
+  to which site and address, on which ports), and the **busiest connections — who to whom** (source, destination,
+  inbound/outbound/internal, ports and firewall).
 
 To get a report every day automatically, set **Report hour** (0–23, UTC) in the Settings panel. The last 30 reports
 are kept. Downloads need the dashboard login.

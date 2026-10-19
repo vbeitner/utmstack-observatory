@@ -290,6 +290,7 @@ details.ev .kvt{margin:4px 0 8px}
 .map-port button{height:32px;padding:0 10px;border-left:1px solid var(--border);font-family:var(--mono);font-size:12.5px;color:var(--muted);cursor:pointer}
 .map-port button:hover,.map-port button:focus-visible{color:var(--cyan)}
 .map-port.on{border-color:var(--cyan)}.map-port.on label{color:var(--cyan)}
+.demo-tag{margin-left:8px;padding:1px 6px;border:1px solid var(--yellow,#FFC857);border-radius:3px;color:var(--yellow,#FFC857);font-size:10.5px;letter-spacing:.08em}
 .netb{display:inline-block;margin-left:5px;padding:0 5px;border:1px solid currentColor;border-radius:3px;font-family:var(--mono);font-size:10.5px;line-height:15px;vertical-align:1px}
 .netb-vpn{color:#FFD23F}.netb-tor{color:#B97CFF}.netb-hosting{color:#8FB8D0}
 .tk-type{color:var(--muted);font-family:var(--mono);font-size:11px;text-transform:capitalize}
@@ -393,7 +394,7 @@ body.paused .mark-core,body.paused .tk.new,body.paused .live-dot{animation-play-
       </svg></button>
       <div>
         <div class="wordmark">UTMSTACK OBSERVATORY</div>
-        <div class="product">SIEM / OPERATIONS OVERVIEW</div>
+        <div class="product">SIEM / OPERATIONS OVERVIEW <span class="demo-tag" id="demoTag" hidden title="Synthetic sample data (DEMO=1): fictional sites, documentation-range IP addresses">DEMO DATA</span></div>
       </div>
       <button class="env" id="envBadge" title="Click to see what is causing this status">…</button>
     </div>
@@ -970,6 +971,7 @@ body.paused .mark-core,body.paused .tk.new,body.paused .live-dot{animation-play-
   function apply(data){
     if(data && data.range_h && data.range_h !== RANGE) return;   // answer to an earlier range choice
     D = data;
+    $('#demoTag').hidden = !data.demo;
     var err = data.error, hasData = !!data.minutes;
     var aiOff = !!(data.ai && data.ai.configured===false);
     $('#tabAi').hidden = aiOff; if(aiOff && sideTab==='ai') setSideTab('rules');
@@ -1398,7 +1400,8 @@ body.paused .mark-core,body.paused .tk.new,body.paused .live-dot{animation-play-
     m.addControl(new maplibregl.AttributionControl({compact: true}), 'top-right');
     var foldCredit = function(){ var c = mapWrap.querySelector('.maplibregl-ctrl-attrib'); if(c) c.classList.remove('maplibregl-compact-show'); };
     m.on('load', function(){
-      ready = true; BASE = m; mapWrap.classList.add('has-base'); mapTip.classList.remove('on'); drawMap(frameT());
+      ready = true; BASE = m; mapWrap.classList.add('has-base'); $('#mapBase').__map = m;   // handle for scripted demos/captures
+      mapTip.classList.remove('on'); drawMap(frameT());
       setTimeout(foldCredit, 0);                       // MapLibre opens the compact credit on load; start folded to (i)
     });
     m.on('render', function(){ if(BASE && (m.isMoving() || !liveOn || reduceMotion)) drawMap(frameT()); });   // same frame as the map

@@ -728,6 +728,15 @@
   // Credit as fixed text of our own: the tile provider's attribution strings are third-party HTML, and MapLibre
   // 4.x's AttributionControl renders them with innerHTML (GHSA-jrc7-96c5-q579), so that control is not used.
   var MAP_CREDIT = 'OpenFreeMap · © OpenMapTiles · © OpenStreetMap contributors';
+  var PENDING = null;                                  // the street map between creation and its 'load' event
+  function syncBaseSize(m){
+    // MapLibre measures its container once when created; if that happened before the layout settled (some browsers),
+    // it keeps a tiny canvas and the arcs, projected through it, crowd into one corner. Re-measure when they differ.
+    var el = $('#mapBase'), c = m.getCanvas();
+    if(Math.abs(c.clientWidth - el.clientWidth) > 2 || Math.abs(c.clientHeight - el.clientHeight) > 2){
+      m.resize(); m.setMinZoom(coverView(el).zoom); landCache = null; drawMap(frameT());
+    }
+  }
   function initBase(){
     if(!window.maplibregl) return;
     var t0 = Date.now();
@@ -749,12 +758,14 @@
         dragRotate: false, pitchWithRotate: false, touchPitch: false,
         cooperativeGestures: !!(window.matchMedia && matchMedia('(pointer: coarse)').matches)});   // phones: 2 fingers move the map
     } catch(e){ return; }                              // no WebGL
+    PENDING = m;
     m.touchZoomRotate.disableRotation();
     var credit = document.createElement('a');
     credit.className = 'map-credit'; credit.textContent = MAP_CREDIT;
     credit.href = 'https://www.openstreetmap.org/copyright'; credit.target = '_blank'; credit.rel = 'noopener noreferrer';
     m.on('load', function(){
-      ready = true; BASE = m; mapWrap.classList.add('has-base'); $('#mapBase').__map = m;   // handle for scripted demos/captures
+      ready = true; BASE = m; PENDING = null; mapWrap.classList.add('has-base'); $('#mapBase').__map = m;   // handle for scripted demos/captures
+      m.resize(); m.setMinZoom(coverView(m.getContainer()).zoom);
       mapTip.classList.remove('on'); drawMap(frameT());
       mapWrap.appendChild(credit);
     });
@@ -766,10 +777,12 @@
     setTimeout(function(){ if(!ready){ try { m.remove(); } catch(_) {} } }, budget);   // tiles unreachable: keep the outline map
   }
   if(window.ResizeObserver) new ResizeObserver(function(){
-    if(BASE){ BASE.resize(); BASE.setMinZoom(coverView(BASE.getContainer()).zoom); }   // still covers after a resize
+    var m = BASE || PENDING;
+    if(m){ m.resize(); m.setMinZoom(coverView(m.getContainer()).zoom); }   // still covers after a resize
     landCache = null; drawMap(frameT());
   }).observe(mapWrap);
   initBase();
+  setInterval(function(){ if(BASE && !document.hidden) syncBaseSize(BASE); }, 1000);   // safety net, see syncBaseSize
 
   /* ---- hover a Latest-Alerts or Latest-blocked-inbound row: zoom the map to its location ---- */
   function positionPinTip(mx, my){

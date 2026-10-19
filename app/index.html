@@ -1021,7 +1021,7 @@ body.paused .mark-core,body.paused .tk.new,body.paused .live-dot{animation-play-
   var hoverPin = null;                             // {lat, lon, label} while a row with coordinates is hovered
   var camX = 0, camY = 0, camZ = 1;                 // eased camera focus (base-projection pixels) and zoom
   var userZ = 1, userX = null, userY = null, viewW = 0, viewH = 0, snapCam = false, MAX_ZOOM = 8;   // user's own zoom/pan
-  var BASE = null, WORLD = [[-170, -56], [180, 78]], pinPrevView = null;
+  var BASE = null, pinPrevView = null;
   var MAP_DPR = Math.min(window.devicePixelRatio || 1, 1.25);   // street map + arc layer resolution: lighter on GPUs   // MapLibre street map, once it has loaded
   fetch('/land.json', {cache:'force-cache'}).then(function(r){ return r.json(); })
     .then(function(d){ LAND = d.rings; landCache = null; drawMap(frameT()); }).catch(function(){});
@@ -1295,7 +1295,7 @@ body.paused .mark-core,body.paused .tk.new,body.paused .live-dot{animation-play-
   $('#mapZoomIn').addEventListener('click', function(){ if(BASE) BASE.zoomIn(); else zoomAt(1.6, viewW/2, viewH/2); });
   $('#mapZoomOut').addEventListener('click', function(){ if(BASE) BASE.zoomOut(); else zoomAt(1/1.6, viewW/2, viewH/2); });
   $('#mapZoomReset').addEventListener('click', function(){
-    if(BASE){ BASE.fitBounds(WORLD, {padding:10}); return; }
+    if(BASE){ BASE.easeTo(coverView(BASE.getContainer())); return; }
     userZ = 1; userX = viewW/2; userY = viewH/2; redrawMap();
   });
   mapCv.addEventListener('wheel', function(e){
@@ -1340,13 +1340,20 @@ body.paused .mark-core,body.paused .tk.new,body.paused .live-dot{animation-play-
   redrawMap();
 
   /* ---- street basemap (MapLibre + OpenFreeMap tiles); the outline map above stays as the fallback ---- */
+  function coverView(el){
+    // Smallest zoom at which the world (512 px square at zoom 0) covers the whole panel, so a tall or square
+    // panel never shows empty bands; centred on the Atlantic like the outline map.
+    var size = Math.max(el.clientWidth || 1, el.clientHeight || 1);
+    return {center: [-20, 28], zoom: Math.max(0, Math.log2(size / 512))};
+  }
   function initBase(){
     if(!window.maplibregl) return;
     var ready = false, m;
     try {
-      m = new maplibregl.Map({container: 'mapBase', style: 'https://tiles.openfreemap.org/styles/dark', bounds: WORLD,
-        pixelRatio: MAP_DPR, fadeDuration: 0,
-        fitBoundsOptions: {padding: 10}, renderWorldCopies: false, attributionControl: false, maxZoom: 18,
+      var start = coverView($('#mapBase'));
+      m = new maplibregl.Map({container: 'mapBase', style: 'https://tiles.openfreemap.org/styles/dark',
+        center: start.center, zoom: start.zoom, minZoom: start.zoom,
+        pixelRatio: MAP_DPR, fadeDuration: 0, renderWorldCopies: false, attributionControl: false, maxZoom: 18,
         dragRotate: false, pitchWithRotate: false, touchPitch: false,
         cooperativeGestures: !!(window.matchMedia && matchMedia('(pointer: coarse)').matches)});   // phones: 2 fingers move the map
     } catch(e){ return; }                              // no WebGL
@@ -1364,7 +1371,10 @@ body.paused .mark-core,body.paused .tk.new,body.paused .live-dot{animation-play-
     m.on('dragstart', function(){ mapTip.classList.remove('on'); });
     setTimeout(function(){ if(!ready){ try { m.remove(); } catch(_) {} } }, 12000);   // tiles unreachable: keep the outline map
   }
-  if(window.ResizeObserver) new ResizeObserver(function(){ if(BASE) BASE.resize(); landCache = null; drawMap(frameT()); }).observe(mapWrap);
+  if(window.ResizeObserver) new ResizeObserver(function(){
+    if(BASE){ BASE.resize(); BASE.setMinZoom(coverView(BASE.getContainer()).zoom); }   // still covers after a resize
+    landCache = null; drawMap(frameT());
+  }).observe(mapWrap);
   initBase();
 
   /* ---- hover a Latest-Alerts or Latest-blocked-inbound row: zoom the map to its location ---- */
@@ -1458,8 +1468,17 @@ body.paused .mark-core,body.paused .tk.new,body.paused .live-dot{animation-play-
       el.style.order = String(w.y*100 + w.x);          // reading order for the single-column (mobile) view
     });
     $$('#board > [data-widget]').forEach(function(el){ if(!on[el.dataset.widget]) el.hidden = true; });
+    fitRows(s);
     renderTabs();
     setTimeout(function(){ landCache = null; if(D) apply(D); drawMap(frameT()); }, 30);   // canvases resize to the new cells
+  }
+  function fitRows(s){
+    // Wall screens (Live map, Activity) are meant to be one screenful: stretch their rows to the window height.
+    // Wall mode has its own CSS for this; edit mode keeps 40 px rows so dragging snaps predictably.
+    var b = $('#board'), rows = s.widgets.reduce(function(m, w){ return Math.max(m, w.y + w.h); }, 0);
+    if(!s.wall || wallOn || editing || window.innerWidth < 1100 || !rows){ b.style.gridAutoRows = ''; return; }
+    var top = b.getBoundingClientRect().top + window.scrollY, avail = window.innerHeight - top - 20;
+    b.style.gridAutoRows = Math.max(40, Math.floor((avail - (rows - 1) * 12) / rows)) + 'px';
   }
   function showScreen(id){
     BOARD.screenId = id; try { localStorage.setItem('obsScreen', id); } catch(e){}

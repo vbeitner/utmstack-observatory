@@ -16,6 +16,7 @@
 #          --support "Name|email|phone|url"   (shown when the logo is clicked)
 #          --abuseipdb-key KEY   --virustotal-key KEY   (live IP reputation on alert detail)
 #          --proxycheck-key KEY  --geoip-online-daily N   (online fallback for attacker IP location / VPN; default 100/day, 0 = off)
+#          --os-account reader|backend   (reader: dedicated read-only OpenSearch user, the default; backend: UTMStack's admin)
 set -euo pipefail
 
 SRC="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -28,6 +29,68 @@ info() { printf '\033[36m==>\033[0m %s\n' "$*"; }
 warn() { printf '\033[33mwarning:\033[0m %s\n' "$*" >&2; }
 die()  { printf '\033[31merror:\033[0m %s\n' "$*" >&2; exit 1; }
 
+# ---------------------------------------------------------------- OpenSearch read-only account (OBS-08)
+# The dashboard only reads. Instead of handing it UTMStack's administrator account, the installer creates a dedicated
+# user with a read-only role through the OpenSearch security REST API, using the backend's credentials once.
+READER_USER=observatory_reader; READER_ROLE=observatory_read
+READER_ROLE_BODY='{"description":"UTMStack Observatory: read-only (managed by install.sh)","cluster_permissions":["cluster:monitor/*"],"index_permissions":[{"index_patterns":["v11-*"],"allowed_actions":["read","view_index_metadata"]},{"index_patterns":["*"],"allowed_actions":["indices:monitor/*"]}]}'
+
+# Runs a command inside the OpenSearch container (tests replace this to talk to a stub server).
+in_node1() { docker exec -i "$OSCID" "$@"; }
+
+# os_req USER PASS METHOD PATH [JSON] -> response body, then the HTTP status code on the last line.
+# Credentials and body go to curl as a config file on stdin, never on a command line.
+os_req() {
+  local q='s/[\\"]/\\&/g' cfg
+  cfg="$(printf 'user = "%s"\nrequest = "%s"\nurl = "%s"\nheader = "Content-Type: application/json"\n' \
+    "$(printf '%s' "$1:$2" | sed "$q")" "$3" "$(printf '%s' "$SCHEME://localhost:$ES_PORT$4" | sed "$q")")"
+  [ -n "${5:-}" ] && cfg="$cfg"$'\n'"data-binary = \"$(printf '%s' "$5" | sed "$q")\""
+  printf '%s\n' "$cfg" | in_node1 curl -sk -m 15 -K - -w '\n%{http_code}' 2>/dev/null || printf '\n000'
+}
+os_code() { os_req "$@" | tail -n1; }
+
+# Decides which OpenSearch account the dashboard gets and sets OS_RUN_USER / OS_RUN_PASS. Falls back to the backend
+# credentials, with a warning, whenever the read-only user cannot be set up or does not work.
+ensure_os_reader() {
+  OS_RUN_USER="$ES_USER"; OS_RUN_PASS="$ES_PASS"
+  local file="$CONF_DIR/os_reader.pass" api="" a code pw
+  [ -n "$ES_USER" ] || { info "OpenSearch has no authentication (security plugin off); no read-only user needed"; return 0; }
+  if [ "${OS_ACCOUNT:-reader}" = backend ]; then
+    warn "--os-account backend: the dashboard uses UTMStack's administrator account for OpenSearch"; return 0
+  fi
+  [ -n "${OSCID:-}" ] || { warn "node1 is not running on this host, so the read-only OpenSearch user cannot be set up; using the backend's administrator account"; return 0; }
+  for a in /_plugins/_security /_opendistro/_security; do
+    [ "$(os_code "$ES_USER" "$ES_PASS" GET "$a/health")" = 200 ] && { api="$a/api"; break; }
+  done
+  [ -n "$api" ] || { warn "the OpenSearch security REST API is not available (plugin disabled or too old); using the backend's administrator account"; return 0; }
+
+  code="$(os_code "$ES_USER" "$ES_PASS" PUT "$api/roles/$READER_ROLE" "$READER_ROLE_BODY")"
+  case "$code" in 200|201) ;; *) warn "could not create the read-only OpenSearch role (HTTP $code); using the backend's administrator account"; return 0;; esac
+
+  # Keep the user's password across re-runs; a new one is generated only when this host has none on file.
+  if [ -s "$file" ]; then pw="$(cat "$file")"
+  else pw="$(head -c 48 /dev/urandom | base64 | tr -d '/+=\n' | cut -c1-28)-Aa9"; fi
+  ( umask 077; printf '%s' "$pw" > "$file" ); chmod 600 "$file"
+  code="$(os_code "$ES_USER" "$ES_PASS" PUT "$api/internalusers/$READER_USER" \
+    "{\"password\":\"$pw\",\"opendistro_security_roles\":[\"$READER_ROLE\"],\"attributes\":{\"managed_by\":\"utmstack-observatory\"}}")"
+  case "$code" in 200|201) ;; *) warn "could not create the read-only OpenSearch user (HTTP $code); using the backend's administrator account"; return 0;; esac
+
+  # The new account must be able to do what the dashboard needs before it replaces the backend's.
+  for _ in 1 2 3; do
+    code="$(os_code "$READER_USER" "$pw" GET /_cluster/health)"; [ "$code" = 200 ] && break; sleep 2
+  done
+  [ "$code" = 200 ] || { warn "the read-only OpenSearch user cannot read cluster health (HTTP $code); using the backend's administrator account"; return 0; }
+  code="$(os_code "$READER_USER" "$pw" POST "/v11-*/_count?ignore_unavailable=true&allow_no_indices=true" '{}')"
+  [ "$code" = 200 ] || { warn "the read-only OpenSearch user cannot read the v11-* indices (HTTP $code); using the backend's administrator account"; return 0; }
+  code="$(os_code "$READER_USER" "$pw" GET "/_cat/indices?h=index&format=json&expand_wildcards=all")"
+  [ "$code" = 200 ] || warn "the read-only OpenSearch user cannot list all indices (HTTP $code): the SIEM health panel will show an error. Re-run with --os-account backend to go back to the administrator account."
+  OS_RUN_USER="$READER_USER"; OS_RUN_PASS="$pw"
+  info "OpenSearch: dashboard uses the read-only user $READER_USER (role $READER_ROLE)"
+}
+
+# Sourced by the tests for the functions above; nothing below runs then.
+[ "${BASH_SOURCE[0]}" = "$0" ] || return 0
+
 [ "$(id -u)" -eq 0 ] || exec sudo -E "$0" "$@"
 
 CMD=install
@@ -36,7 +99,7 @@ case "${1:-}" in install|uninstall|status|logs|password) CMD="$1"; shift;; esac
 # defaults, overridden by the saved config from a previous install, then by flags
 PORT=8765; DASH_USER=admin; AI_HOSTS=""; TLS=0; TZ_NAME=""; STACK=""; SITES=""; HOME_LOC=""; SUPPORT=""
 DASH_USER_FLAG=0; ABUSEIPDB_FLAG=0; VIRUSTOTAL_FLAG=0
-TLS_CERT_SRC=""; TLS_KEY_SRC=""; NEW_PASS=""; IMPORT=""; PURGE=0; ABUSEIPDB_KEY=""; VIRUSTOTAL_KEY=""; PROXYCHECK_KEY=""; GEOIP_ONLINE_DAILY=100
+TLS_CERT_SRC=""; TLS_KEY_SRC=""; NEW_PASS=""; IMPORT=""; PURGE=0; ABUSEIPDB_KEY=""; VIRUSTOTAL_KEY=""; PROXYCHECK_KEY=""; GEOIP_ONLINE_DAILY=100; OS_ACCOUNT=reader
 [ -f "$CONF" ] || TLS=1                          # new installs: HTTPS with a self-signed certificate unless --no-tls
 # shellcheck disable=SC1090
 [ -f "$CONF" ] && . "$CONF"
@@ -54,7 +117,8 @@ while [ $# -gt 0 ]; do
     --support) SUPPORT="$2"; shift 2;;
     --abuseipdb-key) ABUSEIPDB_KEY="$2"; ABUSEIPDB_FLAG=1; shift 2;;  --virustotal-key) VIRUSTOTAL_KEY="$2"; VIRUSTOTAL_FLAG=1; shift 2;;
     --proxycheck-key) PROXYCHECK_KEY="$2"; shift 2;;  --geoip-online-daily) GEOIP_ONLINE_DAILY="$2"; shift 2;;
-    --purge) PURGE=1; shift;;               -h|--help) sed -n '2,16p' "$0"; exit 0;;
+    --os-account) case "$2" in reader|backend) OS_ACCOUNT="$2";; *) die "--os-account: use reader or backend";; esac; shift 2;;
+    --purge) PURGE=1; shift;;               -h|--help) sed -n '2,17p' "$0"; exit 0;;
     *) die "unknown option: $1";;
   esac
 done
@@ -156,6 +220,8 @@ if [ "$TLS" = 1 ]; then
   [ -s "$CERT" ] && [ -s "$KEY" ] || die "TLS certificate/key not found"
 fi
 
+ensure_os_reader
+
 HOSTFS=""; for d in /utmstack/locks /utmstack/updates /utmstack; do [ -d "$d" ] && { HOSTFS="$d"; break; }; done
 
 # ---------------------------------------------------------------- build
@@ -195,9 +261,9 @@ ENVS=(--env "OS_URL=$SCHEME://$ES_HOST:$ES_PORT" --env "DASH_USER=$DASH_USER" --
       --env "TZ=$TZ_NAME" --env "HOST_NAME=$(hostname)" --env "AI_HOSTS=$AI_HOSTS"
       --env "SITE_LOCATIONS=$SITES" --env "HOME_LOCATION=$HOME_LOC"
       --env "SUPPORT_CONTACT=$SUPPORT" --env "INSTALLED_AT=$(date -u +%Y-%m-%dT%H:%M:%SZ)")
-if [ -n "$ES_USER" ]; then
-  mksecret observatory_os_pass "$ES_PASS"; SECRETS+=(--secret "source=observatory_os_pass_$TS,target=os_pass,uid=10001,mode=0400")
-  ENVS+=(--env "OS_USER=$ES_USER" --env "OS_PASS_FILE=/run/secrets/os_pass")
+if [ -n "$OS_RUN_USER" ]; then
+  mksecret observatory_os_pass "$OS_RUN_PASS"; SECRETS+=(--secret "source=observatory_os_pass_$TS,target=os_pass,uid=10001,mode=0400")
+  ENVS+=(--env "OS_USER=$OS_RUN_USER" --env "OS_PASS_FILE=/run/secrets/os_pass")
 fi
 if [ "$TLS" = 1 ]; then
   mkfilesecret observatory_tls_cert "$CERT"; mkfilesecret observatory_tls_key "$KEY"
@@ -263,8 +329,8 @@ else
   [ "$auth" = 200 ] || warn "login check returned HTTP $auth"
 fi
 
-{ printf 'PORT=%q\nDASH_USER=%q\nAI_HOSTS=%q\nTLS=%q\nTZ_NAME=%q\nSTACK=%q\nSITES=%q\nHOME_LOC=%q\nSUPPORT=%q\nABUSEIPDB_KEY=%q\nVIRUSTOTAL_KEY=%q\nPROXYCHECK_KEY=%q\nGEOIP_ONLINE_DAILY=%q\n' \
-    "$PORT" "$DASH_USER" "$AI_HOSTS" "$TLS" "$TZ_NAME" "$STACK" "$SITES" "$HOME_LOC" "$SUPPORT" "$ABUSEIPDB_KEY" "$VIRUSTOTAL_KEY" "$PROXYCHECK_KEY" "$GEOIP_ONLINE_DAILY"
+{ printf 'PORT=%q\nDASH_USER=%q\nAI_HOSTS=%q\nTLS=%q\nTZ_NAME=%q\nSTACK=%q\nSITES=%q\nHOME_LOC=%q\nSUPPORT=%q\nABUSEIPDB_KEY=%q\nVIRUSTOTAL_KEY=%q\nPROXYCHECK_KEY=%q\nGEOIP_ONLINE_DAILY=%q\nOS_ACCOUNT=%q\n' \
+    "$PORT" "$DASH_USER" "$AI_HOSTS" "$TLS" "$TZ_NAME" "$STACK" "$SITES" "$HOME_LOC" "$SUPPORT" "$ABUSEIPDB_KEY" "$VIRUSTOTAL_KEY" "$PROXYCHECK_KEY" "$GEOIP_ONLINE_DAILY" "$OS_ACCOUNT"
   [ -n "$TLS_CERT_SRC" ] && printf 'TLS_CERT_SRC=%q\nTLS_KEY_SRC=%q\n' "$TLS_CERT_SRC" "$TLS_KEY_SRC"; } > "$CONF"; chmod 600 "$CONF"
 
 echo
@@ -275,5 +341,6 @@ if [ "$GENERATED" = 1 ]; then echo "    password: $DASH_PASS   (shown once; also
 elif [ -n "$NEW_PASS" ]; then echo "    password: (the one you set)"; else echo "    password: (unchanged; stored in $PASS_FILE)"; fi
 echo "    password file: $PASS_FILE    config: $CONF"
 [ -z "$OVERRIDDEN" ] || echo "    note: a login set in the Settings panel ($OVERRIDDEN) overrides the above; 'install.sh password' resets it"
+echo "    OpenSearch account: ${OS_RUN_USER:-none (no authentication)}"
 [ "$TLS" = 1 ] || warn "plain HTTP: the login travels unencrypted. Use a trusted network/VPN, or re-run with --tls."
 echo "    The published port listens on all interfaces; restrict it with your firewall if needed."

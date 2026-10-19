@@ -1,5 +1,31 @@
 # Release notes
 
+## 1.19.0 — 2026-10-19
+
+**For users**
+- **Security update.** The dashboard now reads UTMStack's database with its own **read-only** account instead of
+  UTMStack's administrator account. Even if a flaw were ever found in the dashboard, it could not delete or change your
+  SIEM data. Nothing to do: re-running the installer sets this up and keeps the same account on later upgrades.
+- The last lines of the install output now show which database account the dashboard uses. If it says the
+  administrator account was kept, the warning above it explains why (for example, OpenSearch without its security
+  plugin); the dashboard still works as before.
+- New installer option `--os-account backend` to go back to the administrator account on purpose.
+
+**Technical**
+- Closes OBS-08. `install.sh` uses the backend's `ELASTICSEARCH_USER`/`ELASTICSEARCH_PASSWORD` once, through the
+  OpenSearch security REST API (`_plugins/_security`, falling back to `_opendistro/_security`), to create or update
+  role `observatory_read` (`cluster:monitor/*`; `read` + `view_index_metadata` on `v11-*`; `indices:monitor/*` on all
+  indices for `_cat/indices` and `_cat/shards`) and user `observatory_reader` (role assigned directly, no role-mapping
+  changes). Random password kept in `/etc/utmstack-observatory/os_reader.pass` (0600) so re-runs keep the user; passed
+  as the `os_pass` Docker secret (`uid=10001,mode=0400`). The new user is tested (cluster health, `v11-*` count, full
+  index list) before it is used; on any failure, or with the security plugin off, the installer warns and falls back
+  to the backend credentials. Credentials go to curl inside node1 as a config file on stdin, never on a command line.
+- `OS_ACCOUNT` saved in `config.env`. `install.sh` can now be sourced for tests.
+- New `tests/test_os_reader.py`: 14 tests against a stubbed security API (fresh install, idempotent re-run, Open
+  Distro path, plugin off, denied calls, unusable user, opt-out) plus a check that the role covers every OpenSearch
+  path `app/server.py` queries.
+- Not yet verified on a live UTMStack host.
+
 ## 1.18.0 — 2026-10-19
 
 **For users**

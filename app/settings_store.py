@@ -81,9 +81,12 @@ def public_state(data_dir):
 
 if __name__ == "__main__":          # install.sh: `python3 -I settings_store.py DATA_DIR --clear dash_pass ...`
     import sys
-    if len(sys.argv) < 4 or sys.argv[2] != "--clear":
-        sys.exit("usage: settings_store.py DATA_DIR --clear KEY [KEY ...]")
+    if len(sys.argv) < 4 or sys.argv[2] not in ("--clear", "--configured"):
+        sys.exit("usage: settings_store.py DATA_DIR --clear|--configured KEY [KEY ...]")
     data_dir, keys = sys.argv[1], [k for k in sys.argv[3:] if k in KEYS]
+    if sys.argv[2] == "--configured":           # names only, never values: which keys the Settings panel overrides
+        print(" ".join(k for k in keys if configured(data_dir, k)))
+        sys.exit(0)
     d = dict(load(data_dir))
     gone = [k for k in keys if k in d]
     if gone:

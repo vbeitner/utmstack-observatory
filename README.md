@@ -84,6 +84,12 @@ optionally from proxycheck.io for the rest (`--geoip-online-daily`, default 100 
 - Changing the login, an API key or the support contact in the Settings panel needs the current password; every
   settings and shared-layout change is logged (`audit:` lines in `install.sh logs`). A password set there is stored as a
   PBKDF2 hash, and `install.sh password` removes it again.
+- **Real client addresses (1.18+).** The installer publishes the port in Swarm's *host* mode on the manager node, not
+  through the ingress routing mesh. Through the mesh every user arrives from one overlay address (e.g. `10.0.0.2`), so
+  five wrong passwords from anyone locked everyone out and `MAX_CONNECTIONS_PER_IP` was shared by all. Re-run the
+  installer to switch an older install. If the log shows a `hint: the first 100 connections all came from …` line,
+  the port is still going through the mesh (or a proxy). Checks run on the server itself (`curl 127.0.0.1`) arrive from
+  Docker's bridge gateway (e.g. `172.18.0.1`), not `127.0.0.1`.
 - **Swarm publishes the port on every interface.** Restrict it with your firewall. Example allowing only Tailscale and localhost:
   `iptables -I DOCKER-USER -p tcp --dport 8765 ! -s 100.64.0.0/10 -j DROP` (adapt, and persist it your usual way).
 - The container is read-only, drops all capabilities, runs as an unprivileged user, and has no Docker socket. It only *reads* OpenSearch.
@@ -167,6 +173,7 @@ The installer sets these; you only need them to run `app/server.py` by hand.
 | `REQUEST_TIMEOUT_S` | `15` | idle/slow clients are dropped after this many seconds |
 | `LOGIN_MAX_FAILURES`, `LOGIN_LOCK_S` | `5`, `900` | failed logins from one address before it's locked out, and for how long |
 | `MAX_CONNECTIONS`, `MAX_CONNECTIONS_PER_IP` | `64`, `32` | concurrent connections accepted in total / per address; over the cap, new ones are refused immediately |
+| `SHARED_ADDRESS_HINT_AFTER` | `100` | log a one-time hint if this many first connections all came from one address on the container's own network (Swarm ingress); `0` = off |
 | `HEADER_DEADLINE_S` | `10` | a client must send its whole request header within this time (slow-connection protection) |
 | `ALLOWED_HOSTS` | | extra `Host` names accepted when no password is set (otherwise only localhost) |
 | `OS_CA_FILE`, `OS_CHECK_HOSTNAME` | , `1` | verify OpenSearch's TLS certificate against this CA |

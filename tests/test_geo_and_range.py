@@ -188,8 +188,9 @@ class GeoMap(unittest.TestCase):
         self.assertEqual(self.s.attacker_rows(60, "syslog", 443), ([], [], None))
 
     def test_same_attempt_logged_twice_shows_once(self):
-        hits = [{"_source": {"@timestamp": "2026-10-18T20:00:00Z", "dataSource": "10.0.2.3", "log": {"message": m}}}
-                for m in ("Invalid user x from 2.57.122.238 port 1", "Connection closed by invalid user x 2.57.122.238 port 1 [preauth]")]
+        hits = [{"_source": {"@timestamp": t, "dataSource": "10.0.2.3", "log": {"message": m}}}
+                for t, m in (("2026-10-18T20:00:00.120Z", "Invalid user x from 2.57.122.238 port 1"),
+                             ("2026-10-18T20:00:00.870Z", "Connection closed by invalid user x 2.57.122.238 port 1 [preauth]"))]
         self.s.os_call = lambda path, body=None, method="POST": {"hits": {"hits": hits}}
         self.s.GEO.lookup = lambda ip: None
         self.assertEqual(len(self.s.build_geo(60, "syslog")["ticker"]), 1)

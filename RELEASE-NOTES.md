@@ -1,5 +1,11 @@
 # Release notes
 
+## 1.14.2 — 2026-10-18
+
+**For users**
+- An SSH attack logged as several lines within the same second now shows once in the blocked list, even when the
+  lines differ by milliseconds.
+
 ## 1.14.1 — 2026-10-18
 
 **For users**

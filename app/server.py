@@ -12,7 +12,7 @@ import urllib.error, urllib.request
 from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-VERSION = "1.14.1"
+VERSION = "1.14.2"
 HERE = os.path.dirname(os.path.abspath(__file__))
 if HERE not in sys.path:                          # the container runs "python3 -I", which leaves this folder off sys.path
     sys.path.insert(0, HERE)
@@ -1276,7 +1276,7 @@ def build_geo(window, dtype="all", port=None):
         x.setdefault("net", GEO.net_kind(x["ip"]) if x.get("ip") else None)
     seen, uniq = set(), []
     for x in sorted(g["ticker"], key=lambda x: x["t"] or "", reverse=True):
-        k = (x["t"], x.get("ip"), x.get("site"))         # sshd logs one attempt as 2-3 lines in the same second
+        k = ((x["t"] or "")[:19], x.get("ip"), x.get("site"))   # sshd logs one attempt as 2-3 lines in the same second
         if k not in seen:
             seen.add(k); uniq.append(x)
     g["ticker"] = uniq[:14]

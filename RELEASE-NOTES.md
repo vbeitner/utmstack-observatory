@@ -1,5 +1,25 @@
 # Release notes
 
+## 1.16.2 — 2026-10-19
+
+**For users**
+- **Click an attacker** in the live map's blocked list to see what that address did in the last 24 hours: the ports it
+  tried with their service names (SSH, RDP, SMB…), how many were denied and how many allowed, which sites and
+  addresses it reached, and when it was first and last seen. Late replies to your own connections (for example from
+  port 443) are counted separately, since they are not attacks.
+- **Reports** have two new sections for the last 24 hours: **Denied connections** (ports attackers tried and the top
+  attackers with the ports they used) and **Successful connections** (ports in use, connections allowed in from the
+  internet, and the busiest connections showing who connected to whom).
+- After an upgrade the browser always loads the new version of the page's scripts, so a refresh is no longer needed.
+
+**Technical**
+- New `/api/attacker?ip=` (60 s cache; `anon=1` hides site names and internal addresses for wall screens):
+  one 24 h aggregation over `v11-log-*` by `origin.ip`, plus sshd lines in syslog matched on the exact address
+  (counted as port 22). "Reply traffic" = remote port 1–1023 to local port ≥ 1024, shown apart.
+- `report_connections()` adds two firewall aggregations to each report (≈0.5 s on 1.7 M connections a day); a
+  failure there leaves the rest of the report intact.
+- Script and stylesheet URLs carry `?v=<version>`. Demo mode answers both new data sources.
+
 ## 1.16.1 — 2026-10-19
 
 **For users**

@@ -1491,19 +1491,58 @@
   };
 
   /* ---- single blocked-inbound IP (from the Live Firewall Map ticker, not tied to an alert) ---- */
+  var SERVICES = {20:'FTP data',21:'FTP',22:'SSH',23:'Telnet',25:'SMTP',53:'DNS',80:'HTTP',110:'POP3',123:'NTP',135:'MS RPC',
+    137:'NetBIOS',139:'NetBIOS',143:'IMAP',161:'SNMP',389:'LDAP',443:'HTTPS',445:'SMB',465:'SMTPS',500:'IPsec IKE',514:'Syslog',
+    587:'SMTP submission',993:'IMAPS',995:'POP3S',1194:'OpenVPN',1433:'MS SQL',1723:'PPTP',1900:'SSDP',3306:'MySQL',3389:'RDP',
+    4500:'IPsec NAT-T',5060:'SIP',5061:'SIP TLS',5432:'PostgreSQL',5900:'VNC',6881:'BitTorrent',7680:'Windows Delivery Optimization',
+    8000:'HTTP alt',8080:'HTTP proxy',8443:'HTTPS alt',9200:'OpenSearch',11211:'Memcached',27017:'MongoDB'};
+  function when(t){ return t ? String(t).replace('T',' ').slice(0,16)+' UTC' : '–'; }
+  function attackerHtml(d){
+    if(d.error) return '<div class="note-card">'+esc(d.error)+'</div>';
+    if(d.private) return '<div class="note-card">'+esc(d.note)+'</div>';
+    if(!d.total) return '<div class="note-card">No logged traffic from this address in the last '+esc(d.hours||24)+' hours.</div>';
+    var NET = {vpn:'VPN', tor:'Tor', hosting:'Hosting'};
+    var h = '<table class="cmp kvt"><tbody>'+
+      '<tr><td>Connections</td><td>'+nf0.format(d.total)+' · <span style="color:#FF8A95">'+nf0.format(d.denied||0)+' denied</span> · '+
+        '<span style="color:#68F5B1">'+nf0.format(d.allowed||0)+' allowed</span></td></tr>'+
+      '<tr><td>First / last seen</td><td>'+esc(when(d.first))+' → '+esc(when(d.last))+'</td></tr>'+
+      (d.net?'<tr><td>Network</td><td><span class="netb netb-'+esc(d.net)+'">'+esc(NET[d.net]||d.net)+'</span></td></tr>':'')+
+      ((d.types||[]).length?'<tr><td>Seen in</td><td>'+d.types.map(function(t){ return esc(t.type)+' ('+nf0.format(t.count)+')'; }).join(', ')+'</td></tr>':'')+
+      '</tbody></table>';
+    if(d.replies) h += '<div class="ai-note">'+nf0.format(d.replies)+' of these were late replies from port '+
+      esc((d.reply_ports||[]).join(', ')||'?')+' to connections your own devices had already closed. The firewall drops them; they are not attacks.</div>';
+    (d.reasons||[]).forEach(function(r){ h += '<div class="ai-note">Firewall: “'+esc(r.text)+'” ('+nf0.format(r.count)+')</div>'; });
+    if((d.ports||[]).length){
+      h += '<h3 class="tl-title">Ports tried <span class="panel-meta">'+(d.port_count>d.ports.length?'busiest '+d.ports.length+' of '+nf0.format(d.port_count)+' different ports':'on your side')+'</span></h3>'+
+        '<table class="cmp"><thead><tr><th>Port</th><th>Service</th><th>Denied</th><th>Allowed</th></tr></thead><tbody>'+
+        d.ports.map(function(x){ return '<tr><td>'+esc(x.port)+(x.proto?'/'+esc(String(x.proto).toLowerCase()):'')+'</td><td>'+esc(SERVICES[x.port]||'')+
+          '</td><td style="color:'+(x.denied?'#FF8A95':'inherit')+'">'+nf0.format(x.denied)+'</td><td style="color:'+(x.allowed?'#FFC857':'inherit')+'">'+nf0.format(x.allowed)+'</td></tr>'; }).join('')+
+        '</tbody></table>';
+      if(d.ports.some(function(x){ return x.allowed; })) h += '<div class="ai-note" style="color:#FFC857">Some connections on these ports were allowed: check that the service behind them is meant to be reachable from the internet.</div>';
+    } else if(!d.replies) h += '<div class="ai-note">No port information in these logs (e.g. sign-in or VPN-portal events).</div>';
+    if((d.sites||[]).length) h += '<h3 class="tl-title">Sites it reached</h3><table class="cmp"><thead><tr><th>Site</th><th>Denied</th><th>Allowed</th></tr></thead><tbody>'+
+      d.sites.map(function(x){ return '<tr><td>'+esc(x.name||x.site)+'</td><td>'+nf0.format(x.denied)+'</td><td>'+nf0.format(x.allowed)+'</td></tr>'; }).join('')+'</tbody></table>';
+    if((d.targets||[]).length) h += '<h3 class="tl-title">Addresses it targeted</h3><table class="cmp"><thead><tr><th>Address</th><th>Ports</th><th>Denied</th><th>Allowed</th></tr></thead><tbody>'+
+      d.targets.map(function(x){ return '<tr><td>'+esc(x.ip)+'</td><td>'+(x.ports||[]).map(esc).join(', ')+'</td><td>'+nf0.format(x.denied)+'</td><td>'+nf0.format(x.allowed)+'</td></tr>'; }).join('')+'</tbody></table>';
+    return h;
+  }
   VIEWS.ip = function(v, live){
     var ip = (v.ip||'').trim();
-    setHead('Blocked connection', ip);
+    setHead('Attacker', ip);
     if(!IP_RE.test(ip)){ failed({message: 'not a valid IP address'}); return; }
     var ips = [{ip: ip, role: 'blocked inbound'}];
     var html = '<div class="badges"><span class="tag">Blocked inbound</span>'+(v.sub?' <span class="tag">'+esc(v.sub)+'</span>':'')+'</div>';
+    html += '<h3 class="tl-title">Activity from this address <span class="panel-meta">last 24 h · all sites</span></h3>'+
+      '<div id="atk0"><div class="note-card">Looking up…</div></div>';
     html += '<h3 class="tl-title">Reputation <span class="panel-meta">AbuseIPDB &amp; VirusTotal · cached 24 h</span></h3>'+
       '<div class="note-card whois" id="rep0"><b>'+esc(ip)+'</b> <span class="tag">blocked inbound</span><br>Looking up…</div>'+
       '<h3 class="tl-title">WHOIS <span class="panel-meta">RDAP via rdap.org · public IPs only · cached 24 h</span></h3>'+
       '<div class="note-card whois" id="whois0"><b>'+esc(ip)+'</b> <span class="tag">blocked inbound</span><br>Looking up…</div>';
     digBody.innerHTML = html;
-    loadReputation(ips, live);
-    loadWhois(ips, live);
+    api('/api/attacker', wallOn ? {ip: ip, anon: 1} : {ip: ip})
+      .then(function(d){ if(live() && $('#atk0')) $('#atk0').innerHTML = attackerHtml(d); })
+      .catch(function(e){ if(live() && $('#atk0')) $('#atk0').innerHTML = attackerHtml({error: e.message}); })
+      .then(function(){ loadReputation(ips, live); loadWhois(ips, live); });
   };
 
   /* ---- live reputation (AbuseIPDB / VirusTotal) for a list of {ip, role} ---- */

@@ -12,7 +12,7 @@ import urllib.error, urllib.request
 from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-VERSION = "1.16.1"
+VERSION = "1.16.2"
 HERE = os.path.dirname(os.path.abspath(__file__))
 if HERE not in sys.path:                          # the container runs "python3 -I", which leaves this folder off sys.path
     sys.path.insert(0, HERE)
@@ -597,7 +597,16 @@ def build_report_data(hours=24):
                 "window_s": geo["window_s"], "countries": geo["countries"][:10]},
         "storage": {"disk_free": store["disk_free"], "disk_total": store["disk_total"],
                     "days_left": store["days_left"], "avg_daily_total": store["avg_daily_total"]},
+        "connections": _report_connections_safe(hours),
     }
+
+
+def _report_connections_safe(hours):
+    try:
+        return report_connections(max(hours, 24))
+    except Exception as e:                       # the rest of the report is still worth sending
+        print("report connections failed: %s" % str(e)[:200], flush=True)
+        return None
 
 
 def generate_report(hours=24):
@@ -1597,6 +1606,201 @@ def api_geo(window=60, anon=False, dtype="all", port=None):
     return dict(data, ticker=[dict(x, site=names.get(x["site"], x["site"])) for x in data["ticker"]])
 
 
+# ---------------------------------------------------------------- one attacker: which ports, allowed or blocked
+ATTACKER_TTL_S = 60
+# A denied packet from a remote service port (443, 80, 53...) to a high port on our side is almost always a late
+# reply to one of our own connections that the firewall had already closed ("Could not associate packet to any
+# connection"), not an attack. Counted separately so the ports list shows what was really tried.
+REPLY_TRAFFIC = {"bool": {"filter": [{"range": {"origin.port": {"gte": 1, "lte": 1023}}}, {"range": {"target.port": {"gte": 1024}}}]}}
+_attacker_cache = {}
+_attacker_lock = threading.Lock()
+
+
+def _outcome_map(buckets):
+    o = {_q(b["key"]).lower(): b["doc_count"] for b in buckets}
+    return {"denied": o.get("denied", 0) + o.get("failed", 0), "allowed": o.get("success", 0)}
+
+
+def _port_rows(buckets):
+    rows = []
+    for b in buckets:
+        port = _num(b["key"], int)
+        if port is None:
+            continue
+        row = {"port": port, "count": b["doc_count"], "proto": _q(b["proto"]["buckets"][0]["key"]) if b["proto"]["buckets"] else None}
+        row.update(_outcome_map(b["out"]["buckets"]))
+        rows.append(row)
+    return rows
+
+
+def build_attacker(key, hours):
+    """Everything one remote address did in the last `hours`: outcomes, the ports it tried (denied vs allowed), which
+    firewalls/servers it reached and the hosts behind them. Firewall, Linux, Windows and M365 logs carry origin.ip;
+    syslog keeps the address in the message, and its sshd lines are port 22."""
+    outcome = {"terms": {"field": "actionResult.keyword", "size": 5}}
+    r = os_call("/v11-log-*/_search" + IX, {"size": 0, "track_total_hits": True, "query": {"bool": {"filter": [
+        rng("now-%dh" % hours), {"term": {"origin.ip.keyword": key}}]}}, "aggs": {
+        "first": {"min": {"field": "@timestamp"}}, "last": {"max": {"field": "@timestamp"}},
+        "out": outcome,
+        "types": {"terms": {"field": "dataType.keyword", "size": 10}},
+        "replies": {"filter": REPLY_TRAFFIC, "aggs": {"src": {"terms": {"field": "origin.port", "size": 3}}}},
+        "tries": {"filter": {"bool": {"must_not": [REPLY_TRAFFIC]}}, "aggs": {
+            "port_count": {"cardinality": {"field": "target.port"}},
+            "ports": {"terms": {"field": "target.port", "size": 25}, "aggs": {
+                "out": outcome, "proto": {"terms": {"field": "protocol.keyword", "size": 1}}}}}},
+        "reasons": {"terms": {"field": "log.logMessage.keyword", "size": 3}},
+        "sites": {"terms": {"field": "dataSource.keyword", "size": 10}, "aggs": {
+            "out": outcome, "name": {"terms": {"field": "log.deviceName.keyword", "size": 1}},
+            "host": {"terms": {"field": "origin.host.keyword", "size": 1}}}},
+        "targets": {"terms": {"field": "target.ip.keyword", "size": 10}, "aggs": {
+            "out": outcome, "ports": {"terms": {"field": "target.port", "size": 5}}}},
+    }})
+    a = r.get("aggregations") or {}
+    res = {"ip": key, "hours": hours, "total": r.get("hits", {}).get("total", {}).get("value", 0),
+           "first": (a.get("first") or {}).get("value_as_string"), "last": (a.get("last") or {}).get("value_as_string"),
+           "net": GEO.net_kind(key), "types": [{"type": _q(b["key"]), "count": b["doc_count"]} for b in (a.get("types") or {}).get("buckets", [])],
+           "ports": _port_rows(((a.get("tries") or {}).get("ports") or {}).get("buckets", [])),
+           "port_count": ((a.get("tries") or {}).get("port_count") or {}).get("value", 0),
+           "replies": (a.get("replies") or {}).get("doc_count", 0),
+           "reply_ports": [_num(b["key"], int) for b in ((a.get("replies") or {}).get("src") or {}).get("buckets", [])],
+           "reasons": [{"text": _q(b["key"]), "count": b["doc_count"]} for b in (a.get("reasons") or {}).get("buckets", [])],
+           "sites": [], "targets": [], "syslog_ssh": 0}
+    res.update(_outcome_map((a.get("out") or {}).get("buckets", [])))
+    names = {x["id"]: x["name"] for x in fw_sites()} if res["total"] else {}
+    for b in (a.get("sites") or {}).get("buckets", []):
+        site = _q(b["key"])
+        name = next((_q(x["key"]) for k in ("name", "host") for x in b[k]["buckets"]), None) or names.get(site, site)
+        row = {"site": site, "name": names.get(site, name), "count": b["doc_count"]}
+        row.update(_outcome_map(b["out"]["buckets"]))
+        res["sites"].append(row)
+    for b in (a.get("targets") or {}).get("buckets", []):
+        row = {"ip": _q(b["key"]), "count": b["doc_count"], "ports": [_num(x["key"], int) for x in b["ports"]["buckets"]]}
+        row.update(_outcome_map(b["out"]["buckets"]))
+        res["targets"].append(row)
+    # syslog: the address is inside the message text (match_phrase on the exact address, then re-check it)
+    s_ = os_call("/v11-log-syslog*/_search" + IX, {"size": 500, "sort": [{"@timestamp": "desc"}],
+                                                  "_source": ["@timestamp", "log.message", "dataSource", "origin.host", "origin.process"],
+                                                  "query": {"bool": {"filter": [rng("now-%dh" % hours), {"match_phrase": {"log.message": key}}]}}})
+    ssh = {"denied": 0, "allowed": 0, "count": 0}
+    for h in s_.get("hits", {}).get("hits", []):
+        src = h["_source"]
+        msg = (src.get("log") or {}).get("message") or ""
+        if key not in IPV4_RE.findall(msg) or not str((src.get("origin") or {}).get("process") or "").startswith("sshd"):
+            continue
+        ssh["count"] += 1
+        ssh["allowed" if msg.startswith("Accepted") else "denied"] += 1
+        site = _q(src.get("dataSource")) or "syslog"
+        row = next((x for x in res["sites"] if x["site"] == site), None)
+        if row is None:
+            row = {"site": site, "name": (src.get("origin") or {}).get("host") or site, "count": 0, "denied": 0, "allowed": 0}
+            res["sites"].append(row)
+        row["count"] += 1; row["denied" if not msg.startswith("Accepted") else "allowed"] += 1
+        t = src.get("@timestamp")
+        res["first"] = min(filter(None, (res["first"], t))) if t else res["first"]
+        res["last"] = max(filter(None, (res["last"], t))) if t else res["last"]
+    if ssh["count"]:
+        res["syslog_ssh"] = ssh["count"]
+        res["total"] += ssh["count"]; res["denied"] += ssh["denied"]; res["allowed"] += ssh["allowed"]
+        row = next((x for x in res["ports"] if x["port"] == 22), None)
+        if row is None:
+            row = {"port": 22, "count": 0, "proto": "TCP", "denied": 0, "allowed": 0}
+            res["ports"].append(row)
+        for k in ("count", "denied", "allowed"):
+            row[k] += ssh[k]
+    res["ports"].sort(key=lambda x: (x["denied"], x["count"]), reverse=True)
+    res["sites"].sort(key=lambda x: x["count"], reverse=True)
+    return res
+
+
+def api_attacker(ip, anon=False, hours=24):
+    addr = parse_ip(ip)
+    if addr is None:
+        return {"error": "not a valid IP address"}
+    key = str(addr)
+    if not addr.is_global:
+        return {"ip": key, "private": True, "note": "Private or reserved address: an internal device, not an outside attacker."}
+    with _attacker_lock:
+        hit = _attacker_cache.get(key)
+    if not hit or time.time() - hit[0] >= ATTACKER_TTL_S:
+        hit = (time.time(), build_attacker(key, hours))
+        with _attacker_lock:
+            if len(_attacker_cache) > 200:
+                _attacker_cache.clear()
+            _attacker_cache[key] = hit
+    data = hit[1]
+    if anon:                                     # wall screens never receive site names or internal addresses
+        data = dict(data, sites=[dict(x, site="", name="Site %s" % chr(65 + i)) for i, x in enumerate(data["sites"])], targets=[])
+    return data
+
+
+# ---------------------------------------------------------------- report: denied and allowed connections, 24 h
+def report_connections(hours=24):
+    """Firewall traffic for the report: who was denied on which ports (inbound attackers), and which allowed
+    connections ran between which addresses on which ports."""
+    span = rng("now-%dh" % hours)
+    inbound = {"exists": {"field": "origin.geolocation.latitude"}}       # the remote side started it
+    denied = os_call(FW_SEARCH + IX, {"size": 0, "track_total_hits": True, "query": {"bool": {"filter": [
+        span, {"term": {"actionResult.keyword": "denied"}}]}}, "aggs": {
+        "replies": {"filter": {"bool": {"filter": [inbound, REPLY_TRAFFIC]}}},
+        "inbound": {"filter": {"bool": {"filter": [inbound], "must_not": [REPLY_TRAFFIC]}}, "aggs": {
+            "attackers": {"cardinality": {"field": "origin.ip.keyword"}},
+            "ports": {"terms": {"field": "target.port", "size": 15}, "aggs": {
+                "src": {"cardinality": {"field": "origin.ip.keyword"}}, "proto": {"terms": {"field": "protocol.keyword", "size": 1}}}},
+            "top": {"terms": {"field": "origin.ip.keyword", "size": 20}, "aggs": {
+                "country": {"terms": {"field": "origin.geolocation.country.keyword", "size": 1}},
+                "ports": {"terms": {"field": "target.port", "size": 6}},
+                "sites": {"terms": {"field": "log.deviceName.keyword", "size": 3}}}}}}}})
+    ok = os_call(FW_SEARCH + IX, {"size": 0, "track_total_hits": True, "query": {"bool": {"filter": [
+        span, {"term": {"actionResult.keyword": "success"}}]}}, "aggs": {
+        "ports": {"terms": {"field": "target.port", "size": 15}, "aggs": {
+            "src": {"cardinality": {"field": "origin.ip.keyword"}}, "dst": {"cardinality": {"field": "target.ip.keyword"}},
+            "proto": {"terms": {"field": "protocol.keyword", "size": 1}}}},
+        "inbound": {"filter": inbound, "aggs": {"top": {"terms": {"field": "origin.ip.keyword", "size": 15}, "aggs": {
+            "country": {"terms": {"field": "origin.geolocation.country.keyword", "size": 1}},
+            "site": {"terms": {"field": "log.deviceName.keyword", "size": 1}},
+            "dst": {"terms": {"field": "target.ip.keyword", "size": 2}},
+            "ports": {"terms": {"field": "target.port", "size": 4}}}}}},
+        "flows": {"terms": {"field": "origin.ip.keyword", "size": 25}, "aggs": {
+            "country": {"terms": {"field": "origin.geolocation.country.keyword", "size": 1}},
+            "site": {"terms": {"field": "log.deviceName.keyword", "size": 1}},
+            "dst": {"terms": {"field": "target.ip.keyword", "size": 3}, "aggs": {
+                "country": {"terms": {"field": "target.geolocation.country.keyword", "size": 1}},
+                "ports": {"terms": {"field": "target.port", "size": 3}}}}}}}})
+    first = lambda b, k: _q(b[k]["buckets"][0]["key"]) if b[k]["buckets"] else None
+    da, oa = (denied.get("aggregations") or {}).get("inbound") or {}, ok.get("aggregations") or {}
+    out = {"hours": hours, "denied_total": denied.get("hits", {}).get("total", {}).get("value", 0),
+           "denied_inbound": da.get("doc_count", 0),
+           "denied_replies": ((denied.get("aggregations") or {}).get("replies") or {}).get("doc_count", 0), "attackers": (da.get("attackers") or {}).get("value", 0),
+           "denied_ports": [], "top_attackers": [], "allowed_total": ok.get("hits", {}).get("total", {}).get("value", 0),
+           "allowed_ports": [], "allowed_flows": [], "allowed_inbound": []}
+    for b in ((oa.get("inbound") or {}).get("top") or {}).get("buckets", []):
+        ip = _q(b["key"])
+        out["allowed_inbound"].append({"ip": ip, "country": first(b, "country"), "site": first(b, "site"), "count": b["doc_count"],
+                                       "net": GEO.net_kind(ip), "dst": [_q(x["key"]) for x in b["dst"]["buckets"]],
+                                       "ports": [_num(x["key"], int) for x in b["ports"]["buckets"]]})
+    for b in (da.get("ports") or {}).get("buckets", []):
+        out["denied_ports"].append({"port": _num(b["key"], int), "proto": first(b, "proto"), "count": b["doc_count"],
+                                    "sources": b["src"]["value"]})
+    for b in (da.get("top") or {}).get("buckets", []):
+        ip = _q(b["key"])
+        out["top_attackers"].append({"ip": ip, "country": first(b, "country"), "count": b["doc_count"], "net": GEO.net_kind(ip),
+                                     "ports": [_num(x["key"], int) for x in b["ports"]["buckets"]],
+                                     "sites": [_q(x["key"]) for x in b["sites"]["buckets"]]})
+    for b in (oa.get("ports") or {}).get("buckets", []):
+        out["allowed_ports"].append({"port": _num(b["key"], int), "proto": first(b, "proto"), "count": b["doc_count"],
+                                     "sources": b["src"]["value"], "destinations": b["dst"]["value"]})
+    flows = []
+    for b in (oa.get("flows") or {}).get("buckets", []):
+        for d in b["dst"]["buckets"]:
+            src, dst = _q(b["key"]), _q(d["key"])
+            flows.append({"src": src, "src_country": first(b, "country"), "site": first(b, "site"),
+                          "dir": "inbound" if geoip.is_public(src) else "outbound" if geoip.is_public(dst) else "internal",
+                          "dst": dst, "dst_country": first(d, "country"), "count": d["doc_count"],
+                          "ports": [_num(x["key"], int) for x in d["ports"]["buckets"]]})
+    out["allowed_flows"] = sorted(flows, key=lambda x: x["count"], reverse=True)[:25]
+    return out
+
+
 # ---------------------------------------------------------------- support info (logo click)
 DEFAULT_SUPPORT = "Cyber Security Canada|info@cybersecuritycanada.com||https://cybersecuritycanada.com"
 STARTED_AT = datetime.now(timezone.utc).isoformat()
@@ -1923,6 +2127,7 @@ class Handler(BaseHTTPRequestHandler):
             "/api/storage": lambda: api_storage(),
             "/api/whois": lambda: api_whois(p.get("ip", "")[:64]),
             "/api/reputation": lambda: api_reputation(p.get("ip", "")[:64]),
+            "/api/attacker": lambda: api_attacker(p.get("ip", "")[:64], p.get("anon") == "1"),
             "/api/support": lambda: api_support(p.get("anon") == "1"),
             "/api/settings": lambda: api_settings(),
             "/api/reports": lambda: {"reports": reports.list_reports(DATA_DIR), "report_hour": current_report_hour()},
@@ -1973,7 +2178,11 @@ class Handler(BaseHTTPRequestHandler):
                 self.send(200, ctype, f.read(), {"Content-Disposition": 'attachment; filename="%s"' % fname})
         elif u.path in ("/", "/index.html"):
             with open(os.path.join(HERE, "index.html"), "rb") as f:
-                self.send(200, "text/html; charset=utf-8", f.read())
+                page = f.read()
+            # versioned script/style URLs: a browser holding an older copy cannot mix it with a new page after an upgrade
+            for name in (b"/app.js", b"/layout.js", b"/maplibre-gl.js", b"/maplibre-gl.css"):
+                page = page.replace(b'"' + name + b'"', b'"' + name + b"?v=" + VERSION.encode() + b'"')
+            self.send(200, "text/html; charset=utf-8", page)
         else:
             self.send(404, "text/plain", b"not found")
 

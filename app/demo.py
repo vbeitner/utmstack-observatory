@@ -484,11 +484,94 @@ def api_reputation(ip):
                            "flagged_by": ["Demo engine %d" % k for k in range(1, score // 25 + 1)]}}
 
 
+def city_of(ip):
+    for i, c in enumerate(CITIES):
+        for j in range(6):
+            if city_ip(i, j) == ip:
+                return i, c
+    return None, None
+
+
+def api_attacker(ip, anon=False, hours=24):
+    """One remote address in demo data: the ports it tried, mostly denied, at one or two sites."""
+    ip = (ip or "").strip()
+    if ip.rsplit(".", 1)[0] not in DOC_NETS:
+        return {"ip": ip, "private": True, "note": "Private or reserved address: an internal device, not an outside attacker."}
+    r = rng("attacker", ip, now_ms() // 600000)
+    ci, city = city_of(ip)
+    net = net_of(city[0], 0) if city else None
+    ports = []
+    for port, w in sorted(IN_PORTS, key=lambda x: -x[1] * r.random())[:r.randint(2, 6)]:
+        n = int(w * r.uniform(2, 40))
+        ok = int(n * .04) if port == 443 and r.random() < .4 else 0
+        ports.append({"port": port, "count": n, "proto": "UDP" if port == 5060 else "TCP", "denied": n - ok, "allowed": ok})
+    ports.sort(key=lambda x: (x["denied"], x["count"]), reverse=True)
+    total = sum(x["count"] for x in ports)
+    fws = r.sample(FIREWALLS, r.randint(1, 3))
+    sites, left = [], total
+    for i, f in enumerate(fws):
+        n = left if i == len(fws) - 1 else int(left * r.uniform(.4, .7))
+        left -= n
+        sites.append({"site": "" if anon else "198.51.100.%d" % (200 + FIREWALLS.index(f)), "name": "Site %s" % chr(65 + i) if anon else f[0],
+                      "count": n, "denied": n, "allowed": 0})
+    ssh = next((x["count"] for x in ports if x["port"] == 22), 0) // 3
+    return {"ip": ip, "hours": hours, "total": total, "first": iso(now_ms() - r.randrange(3, 23) * 3600000),
+            "last": iso(now_ms() - r.randrange(5, 600) * 1000), "net": net,
+            "types": [{"type": "firewall-sophos-xg", "count": total - ssh}] + ([{"type": "syslog", "count": ssh}] if ssh else []),
+            "ports": ports, "port_count": len(ports), "replies": r.choice([0, 0, 0, 12, 40]), "reply_ports": [443],
+            "reasons": [], "sites": sites, "syslog_ssh": ssh,
+            "targets": [] if anon else [{"ip": "10.%d.0.%d" % (FIREWALLS.index(f) + 1, 10 + k), "count": x["count"], "ports": [x["port"]],
+                                         "denied": x["denied"], "allowed": x["allowed"]} for k, (f, x) in enumerate(zip(fws * 3, ports))][:5],
+            "denied": sum(x["denied"] for x in ports), "allowed": sum(x["allowed"] for x in ports)}
+
+
+def report_connections(hours=24):
+    r = rng("report-conn", now_ms() // 3600000)
+    scale = 24 / 24
+    attackers = []
+    for i, c in enumerate(CITIES):
+        if c[6] <= 1:
+            continue
+        for j in range(2):
+            ip = city_ip(i, j)
+            n = int(c[6] * r.uniform(150, 900))
+            ps = sorted(IN_PORTS, key=lambda x: -x[1] * r.random())[:r.randint(1, 4)]
+            attackers.append({"ip": ip, "country": c[1], "count": n, "net": net_of(c[0], j), "ports": [p for p, _ in ps],
+                              "sites": [f[0] for f in r.sample(FIREWALLS, r.randint(1, 3))]})
+    attackers.sort(key=lambda x: x["count"], reverse=True)
+    dports = [{"port": p, "proto": "UDP" if p == 5060 else "TCP", "count": int(w * r.uniform(700, 1100) * scale),
+               "sources": int(w * r.uniform(8, 20))} for p, w in IN_PORTS]
+    dports.sort(key=lambda x: x["count"], reverse=True)
+    aports = [{"port": p, "proto": "UDP" if p in (53, 123) else "TCP", "count": int(w * r.uniform(9000, 12000)),
+               "sources": int(w * r.uniform(2, 6)) + 3, "destinations": int(w * r.uniform(20, 60)) + 2} for p, w in OUT_PORTS]
+    aports.sort(key=lambda x: x["count"], reverse=True)
+    flows = []
+    for k in range(18):
+        f = FIREWALLS[k % len(FIREWALLS)]
+        ci = pick(r, [(i, c[5]) for i, c in enumerate(CITIES)])
+        port = pick(r, OUT_PORTS)
+        flows.append({"src": "10.%d.0.%d" % (k % len(FIREWALLS) + 1, 20 + k), "src_country": None, "site": f[0], "dir": "outbound",
+                      "dst": city_ip(ci, k % 6), "dst_country": CITIES[ci][1], "count": int(r.uniform(800, 9000)), "ports": [port]})
+    for k in range(4):
+        flows.append({"src": "10.1.0.%d" % (40 + k), "src_country": None, "site": FIREWALLS[0][0], "dir": "internal",
+                      "dst": "10.%d.0.10" % (k + 2), "dst_country": None, "count": int(r.uniform(3000, 12000)), "ports": [445, 3389, 443, 53][k:k + 1]})
+    flows.sort(key=lambda x: x["count"], reverse=True)
+    inbound = [{"ip": city_ip(i, 1), "country": CITIES[i][1], "site": FIREWALLS[n % 3][0], "count": int(r.uniform(40, 900)),
+                "net": None, "dst": ["10.%d.0.5" % (n % 3 + 1)], "ports": [443] if n else [443, 3389]}
+               for n, i in enumerate((0, 7, 9, 13))]
+    inbound.sort(key=lambda x: x["count"], reverse=True)
+    denied_in = sum(x["count"] for x in dports)
+    return {"hours": hours, "denied_total": int(denied_in * 1.8), "denied_inbound": denied_in, "denied_replies": int(denied_in * .3),
+            "attackers": len(attackers) * 37, "denied_ports": dports[:15], "top_attackers": attackers[:20],
+            "allowed_total": sum(x["count"] for x in aports) * 3, "allowed_ports": aports, "allowed_flows": flows[:25],
+            "allowed_inbound": inbound}
+
+
 def install(g):
     """Swap the server's data functions for the demo ones (called by server.py when DEMO=1)."""
     S.update(g)
     for name in ("collect", "fetch_hourly", "api_sources", "api_source", "api_alerts", "api_alert", "compute_lag",
-                 "api_cluster", "api_storage", "api_whois", "api_reputation"):
+                 "api_cluster", "api_storage", "api_whois", "api_reputation", "api_attacker", "report_connections"):
         g[name] = globals()[name]
     g["build_geo"] = geo
     g["snapshot_storage"] = lambda: None          # api_storage above already answers from demo data

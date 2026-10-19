@@ -12,13 +12,14 @@ import urllib.error, urllib.request
 from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-VERSION = "1.3.1"
+VERSION = "1.10.2"
 HERE = os.path.dirname(os.path.abspath(__file__))
 if HERE not in sys.path:                          # the container runs "python3 -I", which leaves this folder off sys.path
     sys.path.insert(0, HERE)
 import layout_store  # noqa: E402  (needs the path above)
 import settings_store  # noqa: E402
 import reports  # noqa: E402
+import geoip  # noqa: E402
 
 
 def env(name, default=""):
@@ -1115,7 +1116,16 @@ def opensearch_put_cmd(path, body):
 # Arcs between each firewall and the remote cities it talks to, from Sophos XG logs. UTMStack already
 # geolocates public IPs (origin/target.geolocation), so no GeoIP database or outside lookup is needed.
 FW_SEARCH = "/v11-log-firewall-sophos-xg-*/_search"
+# Types UTMStack geolocates itself, and types whose attacker IPs this dashboard looks up (geoip.py);
+# "all" means every one of them together.
+NET_TYPES = ("firewall-sophos-xg", "o365", "google")
+ATTACK_TYPES = ("linux", "syslog", "wineventlog", "o365")
+GEO_TYPES = NET_TYPES + ("linux", "syslog", "wineventlog")
+GEO = geoip.GeoIP(DATA_DIR, secret("PROXYCHECK_KEY"), int(env("GEOIP_ONLINE_DAILY", "100") or 0))
 GEO_WINDOWS_S = (60, 300, 900)
+# Street basemap: MapLibre is served from here; only map tiles, fonts and icons come from this one host.
+TILE_HOST = "https://tiles.openfreemap.org"
+STATIC_FILES = {"/maplibre-gl.js": "text/javascript; charset=utf-8", "/maplibre-gl.css": "text/css; charset=utf-8"}
 GEO_TTL_S = 10                                   # one shared query per 10 s, however many viewers
 SITE_TTL_S = 1800                                # re-check firewall locations every 30 min
 MAX_ARCS = 200
@@ -1228,10 +1238,54 @@ def _outcomes(buckets):
     return o.get("denied", 0), o.get("failed", 0)
 
 
-def build_geo(window):
-    span = rng("now-%ds" % window)
+def geo_scope(dtype):
+    """Index pattern and dataType filter for the types UTMStack geolocates itself, one or all of them."""
+    if dtype == "firewall-sophos-xg":
+        return FW_SEARCH, {"term": {"dataType.keyword": dtype}}
+    if dtype in NET_TYPES:
+        return "/v11-log-%s*/_search" % dtype, {"term": {"dataType.keyword": dtype}}
+    return "/v11-log-*/_search", {"terms": {"dataType.keyword": list(NET_TYPES)}}
+
+
+def empty_geo(window, dtype):
+    return {"window_s": window, "type": dtype, "generated": datetime.now(timezone.utc).isoformat(), "age_s": None,
+            "total": 0, "denied": 0, "failed": 0, "per_min": 0, "home": current_home(), "sites": [], "arcs": [],
+            "arcs_total": 0, "countries": {}, "ticker": [], "_newest": None}
+
+
+def build_geo(window, dtype="all"):
+    g = build_net_geo(window, dtype) if dtype == "all" or dtype in NET_TYPES else empty_geo(window, dtype)
+    for t in ATTACK_TYPES if dtype == "all" else ([dtype] if dtype in ATTACK_TYPES else []):
+        try:
+            add_attackers(g, window, t)
+        except Exception as e:                   # one source failing must not blank the map
+            print("attacker geo (%s) failed: %s" % (t, str(e)[:200]), flush=True)
+    for x in g["ticker"]:
+        x.setdefault("net", GEO.net_kind(x["ip"]) if x.get("ip") else None)
+    seen, uniq = set(), []
+    for x in sorted(g["ticker"], key=lambda x: x["t"] or "", reverse=True):
+        k = (x["t"], x.get("ip"), x.get("site"))         # sshd logs one attempt as 2-3 lines in the same second
+        if k not in seen:
+            seen.add(k); uniq.append(x)
+    g["ticker"] = uniq[:14]
+    g["arcs"].sort(key=lambda x: x["count"], reverse=True)
+    g["arcs_total"] = len(g["arcs"])
+    g["arcs"] = g["arcs"][:MAX_ARCS]
+    g["countries"] = sorted(g["countries"].values(), key=lambda c: c["count"], reverse=True)[:12]
+    g["per_min"] = round(g["total"] * 60 / window)
+    newest = g.pop("_newest")
+    g["age_s"] = round(max(0, time.time() - newest / 1000), 1) if newest else None
+    g["geoip"] = {k: GEO.status[k] for k in ("db", "lists", "online_today")}
+    return g
+
+
+def build_net_geo(window, dtype):
+    search, type_flt = geo_scope(dtype)
+    span = {"bool": {"filter": [rng("now-%ds" % window), type_flt]}}
     has = lambda f: {"exists": {"field": f}}
-    r = os_call(FW_SEARCH, {"size": 0, "track_total_hits": True, "query": span, "aggs": {
+    # firewalls only "deny"; for sign-in logs (M365, Google) a failed login is the blocked event
+    blocked = ["denied"] if dtype == "firewall-sophos-xg" else ["denied", "failed"]
+    r = os_call(search, {"size": 0, "track_total_hits": True, "query": span, "aggs": {
         "newest": {"max": {"field": "@timestamp"}},
         "outcome": {"terms": {"field": "actionResult.keyword", "size": 5}},
         "per_fw": {"terms": {"field": "dataSource.keyword", "size": 100},
@@ -1242,16 +1296,18 @@ def build_geo(window):
                                     "must_not": [has("origin.geolocation.latitude")]}},
                 "aggs": {"fw": _remote_aggs("target")}},
     }})
-    t = os_call(FW_SEARCH, {"size": 14, "sort": [{"@timestamp": "desc"}], "query": {"bool": {"filter": [
-        span, {"term": {"actionResult.keyword": "denied"}}, has("origin.geolocation.latitude")]}},
+    t = os_call(search, {"size": 14, "sort": [{"@timestamp": "desc"}], "query": {"bool": {"filter": [
+        span, {"terms": {"actionResult.keyword": blocked}}, has("origin.geolocation.latitude")]}},
         "_source": ["@timestamp", "origin.ip", "origin.geolocation.city", "origin.geolocation.country",
                     "origin.geolocation.countryCode", "origin.geolocation.latitude", "origin.geolocation.longitude",
-                    "target.port", "protocol", "dataSource"]})
+                    "target.port", "protocol", "dataSource", "dataType"]})
+    if "aggregations" not in r:                  # no index for this type yet (e.g. Google not connected): empty map
+        return empty_geo(window, dtype)
     a = r["aggregations"]
     total = r["hits"]["total"]["value"]
     denied, failed = _outcomes(a["outcome"]["buckets"])
 
-    sites = [dict(x) for x in fw_sites()]
+    sites = [dict(x) for x in fw_sites()] if dtype in ("all", "firewall-sophos-xg") else []
     by_id = {x["id"]: x for x in sites}
     for b in a["per_fw"]["buckets"]:
         ip = _q(b["key"])
@@ -1280,7 +1336,6 @@ def build_geo(window):
                                  "lat": round(lat, 3), "lon": round(lon, 3), "count": cityb["doc_count"], "denied": d})
                     c = countries.setdefault(cc, {"cc": cc, "country": _q(name), "count": 0, "denied": 0, "in": 0, "out": 0})
                     c["count"] += cityb["doc_count"]; c["denied"] += d; c[direction] += cityb["doc_count"]
-    arcs.sort(key=lambda x: x["count"], reverse=True)
 
     ticker = []
     for h in t["hits"]["hits"]:
@@ -1290,16 +1345,132 @@ def build_geo(window):
         lat, lon = g.get("latitude"), g.get("longitude")
         ticker.append({"t": s_.get("@timestamp"), "ip": o.get("ip"), "city": g.get("city"), "country": g.get("country"),
                        "cc": g.get("countryCode"), "port": (s_.get("target") or {}).get("port"),
-                       "proto": s_.get("protocol"), "site": _q(s_.get("dataSource")),
+                       "proto": s_.get("protocol"), "site": _q(s_.get("dataSource")), "type": s_.get("dataType"),
                        "lat": round(lat, 3) if lat is not None else None, "lon": round(lon, 3) if lon is not None else None})
 
-    newest = a["newest"].get("value")
-    return {"window_s": window, "generated": datetime.now(timezone.utc).isoformat(),
-            "age_s": round(max(0, time.time() - newest / 1000), 1) if newest else None,
-            "total": total, "denied": denied, "failed": failed, "per_min": round(total * 60 / window),
-            "home": current_home(), "sites": sites, "arcs": arcs[:MAX_ARCS], "arcs_total": len(arcs),
-            "countries": sorted(countries.values(), key=lambda c: c["count"], reverse=True)[:12],
-            "ticker": ticker}
+    out = empty_geo(window, dtype)
+    out.update(total=total, denied=denied, failed=failed, sites=sites, arcs=arcs, countries=countries, ticker=ticker,
+               _newest=a["newest"].get("value"))
+    return out
+
+
+# ---------------------------------------------------------------- attackers from logs UTMStack doesn't geolocate
+# Syslog keeps the address inside the message text; Linux, Windows and M365 have origin.ip. Their locations and
+# VPN / hosting / Tor status come from geoip.py (local databases, online fallback).
+SYSLOG_PHRASES = ("Invalid user", "Failed password", "Failed publickey", "authentication failure", "preauth",
+                  "Unable to negotiate", "maximum authentication attempts", "Accepted")
+IPV4_RE = re.compile(r"(?<![\d.])(\d{1,3}(?:\.\d{1,3}){3})(?![\d.])")
+PORT_RE = re.compile(r"\bport (\d{1,5})\b")
+
+
+def syslog_ip(message):
+    for ip in IPV4_RE.findall(message or ""):
+        if geoip.is_public(ip):
+            return ip
+    return None
+
+
+def attacker_rows(window, dtype):
+    """-> (rows [{site, name, ip, count, blocked}], ticker candidates, newest ms) for one log type."""
+    span = rng("now-%ds" % window)
+    path = "/v11-log-%s*/_search" % dtype + IX
+    rows, ticker, newest = {}, [], None
+    if dtype == "syslog":
+        r = os_call(path, {"size": 1000, "sort": [{"@timestamp": "desc"}],
+                           "_source": ["@timestamp", "log.message", "dataSource", "origin.host"],
+                           "query": {"bool": {"filter": [span, {"term": {"dataType.keyword": "syslog"}}],
+                                              "should": [{"match_phrase": {"log.message": p}} for p in SYSLOG_PHRASES],
+                                              "minimum_should_match": 1}}})
+        for h in r.get("hits", {}).get("hits", []):
+            s_ = h["_source"]
+            msg = (s_.get("log") or {}).get("message") or ""
+            ip = syslog_ip(msg)
+            if not ip:
+                continue
+            site = _q(s_.get("dataSource")) or "syslog"
+            bad = not msg.startswith("Accepted")
+            row = rows.setdefault((site, ip), {"site": site, "name": (s_.get("origin") or {}).get("host") or site,
+                                               "ip": ip, "count": 0, "blocked": 0})
+            row["count"] += 1; row["blocked"] += bad
+            if bad and len(ticker) < 14:
+                m = PORT_RE.search(msg)
+                ticker.append({"t": s_.get("@timestamp"), "ip": ip, "site": site, "type": "syslog",
+                               "port": m.group(1) if m else None, "what": msg[:80]})
+        hits = r.get("hits", {}).get("hits", [])
+        if hits:
+            newest = datetime.fromisoformat(hits[0]["_source"]["@timestamp"].replace("Z", "+00:00")).timestamp() * 1000
+        return list(rows.values()), ticker, newest
+
+    flt = [span, {"term": {"dataType.keyword": dtype}}, {"exists": {"field": "origin.ip"}}]
+    q = {"bool": {"filter": flt}}
+    if dtype == "o365":                          # the ones UTMStack already placed are on the map via build_net_geo
+        q["bool"]["must_not"] = [{"exists": {"field": "origin.geolocation.latitude"}}]
+    r = os_call(path, {"size": 0, "query": q, "aggs": {
+        "newest": {"max": {"field": "@timestamp"}},
+        "src": {"terms": {"field": "dataSource.keyword", "size": 50}, "aggs": {
+            "host": {"terms": {"field": "origin.host.keyword", "size": 1}},
+            "ip": {"terms": {"field": "origin.ip.keyword", "size": 300},
+                   "aggs": {"out": {"terms": {"field": "actionResult.keyword", "size": 4}}}}}}}})
+    a = r.get("aggregations")
+    if not a:
+        return [], [], None
+    for sb in a["src"]["buckets"]:
+        site = _q(sb["key"])
+        name = _q(sb["host"]["buckets"][0]["key"]) if sb["host"]["buckets"] and dtype != "o365" else site
+        for ib in sb["ip"]["buckets"]:
+            ip = _q(ib["key"])
+            if not geoip.is_public(ip):
+                continue
+            d, f = _outcomes(ib["out"]["buckets"])
+            rows[(site, ip)] = {"site": site, "name": name, "ip": ip, "count": ib["doc_count"], "blocked": d + f}
+    t = os_call(path, {"size": 30, "sort": [{"@timestamp": "desc"}], "_source": ["@timestamp", "origin.ip", "dataSource", "target.port"],
+                       "query": {"bool": {"filter": flt + [{"terms": {"actionResult.keyword": ["denied", "failed"]}}]}}})
+    for h in t.get("hits", {}).get("hits", []):
+        s_ = h["_source"]
+        ip = (s_.get("origin") or {}).get("ip")
+        if geoip.is_public(ip or "") and len(ticker) < 14:
+            ticker.append({"t": s_.get("@timestamp"), "ip": ip, "site": _q(s_.get("dataSource")), "type": dtype,
+                           "port": (s_.get("target") or {}).get("port")})
+    return list(rows.values()), ticker, a["newest"].get("value")
+
+
+def add_attackers(g, window, dtype):
+    rows, ticker, newest = attacker_rows(window, dtype)
+    if newest and (not g["_newest"] or newest > g["_newest"]):
+        g["_newest"] = newest
+    by_id = {x["id"]: x for x in g["sites"]}
+    arcs = {(a["site"], a["dir"], a["cc"], a["city"]): a for a in g["arcs"]}
+    countries = g["countries"]
+    home = current_home()
+    for r in rows:
+        g["total"] += r["count"]; g["denied"] += r["blocked"]
+        site = by_id.get(r["site"])
+        if not site:                             # a server or tenant, not a firewall: no location of its own
+            site = by_id[r["site"]] = {"id": r["site"], "name": r["name"], "lat": home["lat"], "lon": home["lon"],
+                                       "city": home.get("city"), "loc_source": "home", "total": 0, "denied": 0}
+            g["sites"].append(site)
+        site["total"] += r["count"]; site["denied"] += r["blocked"]
+        loc = GEO.lookup(r["ip"])
+        if not loc:
+            continue
+        key = (r["site"], "in", loc["cc"], loc["city"])
+        a = arcs.get(key)
+        if not a:
+            a = arcs[key] = {"site": r["site"], "dir": "in", "cc": loc["cc"], "country": loc["country"], "city": loc["city"],
+                             "lat": round(loc["lat"], 3), "lon": round(loc["lon"], 3), "count": 0, "denied": 0}
+            g["arcs"].append(a)
+        a["count"] += r["count"]; a["denied"] += r["blocked"]
+        if loc.get("net"):
+            a["vpn"] = a.get("vpn", 0) + r["count"]
+        c = countries.setdefault(loc["cc"], {"cc": loc["cc"], "country": loc["country"], "count": 0, "denied": 0, "in": 0, "out": 0})
+        c["count"] += r["count"]; c["denied"] += r["blocked"]; c["in"] += r["count"]
+    for x in ticker:
+        loc = GEO.lookup(x["ip"]) or {}
+        x.update(city=loc.get("city"), country=loc.get("country"), cc=loc.get("cc"), net=loc.get("net"),
+                 lat=round(loc["lat"], 3) if loc.get("lat") is not None else None,
+                 lon=round(loc["lon"], 3) if loc.get("lon") is not None else None)
+        x.setdefault("proto", None)
+        g["ticker"].append(x)
 
 
 def anonymize(geo):
@@ -1320,13 +1491,14 @@ def anonymize(geo):
     return out
 
 
-def api_geo(window=60, anon=False):
+def api_geo(window=60, anon=False, dtype="all"):
     window = window if window in GEO_WINDOWS_S else 60
+    dtype = dtype if dtype in GEO_TYPES else "all"
     with _geo_lock:
-        hit = _geo_cache.get(window)
+        hit = _geo_cache.get((window, dtype))
         if not hit or time.time() - hit[0] >= GEO_TTL_S:
-            hit = (time.time(), build_geo(window))
-            _geo_cache[window] = hit
+            hit = (time.time(), build_geo(window, dtype))
+            _geo_cache[(window, dtype)] = hit
     data = hit[1]                                # shared cache: never modify it in place
     if anon:
         return anonymize(data)
@@ -1505,8 +1677,9 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("X-Content-Type-Options", "nosniff")
         self.send_header("X-Frame-Options", "DENY")
         self.send_header("Referrer-Policy", "no-referrer")
-        self.send_header("Content-Security-Policy", "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'unsafe-inline'; "
-                         "img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'")
+        self.send_header("Content-Security-Policy", "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; "
+                         "img-src 'self' data: blob: %s; connect-src 'self' %s; worker-src blob:; child-src blob:; "
+                         "frame-ancestors 'none'; base-uri 'none'; form-action 'none'" % (TILE_HOST, TILE_HOST))
         if isinstance(self.connection, ssl.SSLSocket):
             self.send_header("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
         for k, v in (extra or {}).items():
@@ -1571,7 +1744,7 @@ class Handler(BaseHTTPRequestHandler):
             "/api/settings": lambda: api_settings(),
             "/api/reports": lambda: {"reports": reports.list_reports(DATA_DIR), "report_hour": current_report_hour()},
             "/api/geo": lambda: api_geo(int(p["window"]) if p.get("window", "").isdigit() else 60,
-                                        p.get("anon") == "1"),
+                                        p.get("anon") == "1", p.get("type", "all")),
         }
         if u.path == "/api/data":
             try:
@@ -1599,6 +1772,9 @@ class Handler(BaseHTTPRequestHandler):
         elif u.path == "/api/layout":
             lay, notes = layout_store.load_with_notes(DATA_DIR)
             self.send(200, "application/json", json.dumps({"layout": lay, "notes": notes}).encode())
+        elif u.path in STATIC_FILES:
+            with open(os.path.join(HERE, u.path[1:]), "rb") as f:
+                self.send(200, STATIC_FILES[u.path], f.read(), {"Cache-Control": "private, max-age=86400"})
         elif u.path == "/land.json":                  # static world outline for the live map
             with open(os.path.join(HERE, "land.json"), "rb") as f:
                 self.send(200, "application/json", f.read(), {"Cache-Control": "private, max-age=86400"})
@@ -1721,6 +1897,7 @@ if __name__ == "__main__":
     threading.Thread(target=refresher, daemon=True).start()
     threading.Thread(target=history_loop, daemon=True).start()
     threading.Thread(target=lag_loop, daemon=True).start()
+    GEO.load(); GEO.start()
     threading.Thread(target=report_loop, daemon=True).start()
     srv = Server((BIND, PORT), Handler)
     scheme = "http"

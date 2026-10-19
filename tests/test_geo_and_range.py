@@ -121,6 +121,73 @@ class GeoMap(unittest.TestCase):
         self.assertEqual((per["Dependable_HQ"]["total"], per["Dependable_HQ"]["denied"]), (600, 100))
         self.assertEqual(per["Keltic_North"]["total"], 0)                       # quiet in this window
 
+    def test_type_scopes_the_index_and_filter(self):
+        g = self.s.build_geo(60, "o365")
+        main = next(b for p, b in self.calls if "per_fw" in (b or {}).get("aggs", {}))
+        path = next(p for p, b in self.calls if "per_fw" in (b or {}).get("aggs", {}))
+        self.assertEqual(path, "/v11-log-o365*/_search")
+        self.assertIn({"term": {"dataType.keyword": "o365"}}, main["query"]["bool"]["filter"])
+        self.assertEqual(g["type"], "o365")
+        self.assertNotIn("Keltic_North", [x["name"] for x in g["sites"]])     # idle firewalls only on firewall/all views
+        ticker = next(b for p, b in self.calls if "sort" in (b or {}))
+        self.assertIn({"terms": {"actionResult.keyword": ["denied", "failed"]}}, ticker["query"]["bool"]["filter"])
+
+    def test_all_covers_every_geo_type_and_unknown_type_means_all(self):
+        g = self.s.api_geo(60, dtype="nonsense")
+        self.assertEqual(g["type"], "all")
+        main = next(b for p, b in self.calls if "per_fw" in (b or {}).get("aggs", {}))
+        self.assertIn({"terms": {"dataType.keyword": list(self.s.NET_TYPES)}}, main["query"]["bool"]["filter"])
+
+    def test_type_with_no_index_gives_an_empty_map(self):
+        self.s.os_call = lambda path, body=None, method="POST": {"hits": {"total": {"value": 0}, "hits": []}}
+        g = self.s.build_geo(60, "google")
+        self.assertEqual((g["type"], g["total"], g["arcs"], g["ticker"]), ("google", 0, [], []))
+
+    def test_syslog_attackers_are_located_and_counted_as_blocked(self):
+        hits = [{"_source": {"@timestamp": "2026-10-18T20:00:0%dZ" % i, "dataSource": "10.0.2.3", "origin": {"host": "truenas"},
+                             "log": {"message": m}}} for i, m in enumerate([
+            "Invalid user firedancer from 2.57.122.238 port 54456",
+            "Failed password for root from 2.57.122.238 port 1022 ssh2",
+            "Accepted publickey for admin from 10.0.2.50 port 5000",     # private: ignored
+            "Accepted password for victor from 81.2.69.160 port 6000"])]
+        self.s.os_call = lambda path, body=None, method="POST": {"hits": {"hits": hits}}
+        self.s.GEO.lookup = lambda ip: {"2.57.122.238": {"lat": 52.37, "lon": 4.9, "city": "Amsterdam", "country": "Netherlands",
+                                                         "cc": "NL", "net": "hosting"},
+                                        "81.2.69.160": {"lat": 51.5, "lon": -0.1, "city": "London", "country": "United Kingdom",
+                                                        "cc": "GB", "net": None}}.get(ip)
+        g = self.s.build_geo(60, "syslog")
+        ams = next(a for a in g["arcs"] if a["city"] == "Amsterdam")
+        self.assertEqual((ams["count"], ams["denied"], ams["vpn"], ams["dir"], ams["site"]), (2, 2, 2, "in", "10.0.2.3"))
+        lon = next(a for a in g["arcs"] if a["city"] == "London")
+        self.assertEqual(lon["denied"], 0)                                      # a successful login is not blocked
+        self.assertEqual((g["total"], g["denied"]), (3, 2))
+        self.assertEqual([x["ip"] for x in g["ticker"]], ["2.57.122.238", "2.57.122.238"])   # different seconds: both kept
+        self.assertEqual(g["ticker"][0]["net"], "hosting")
+        self.assertEqual(next(x for x in g["sites"] if x["id"] == "10.0.2.3")["name"], "truenas")
+
+    def test_same_attempt_logged_twice_shows_once(self):
+        hits = [{"_source": {"@timestamp": "2026-10-18T20:00:00Z", "dataSource": "10.0.2.3", "log": {"message": m}}}
+                for m in ("Invalid user x from 2.57.122.238 port 1", "Connection closed by invalid user x 2.57.122.238 port 1 [preauth]")]
+        self.s.os_call = lambda path, body=None, method="POST": {"hits": {"hits": hits}}
+        self.s.GEO.lookup = lambda ip: None
+        self.assertEqual(len(self.s.build_geo(60, "syslog")["ticker"]), 1)
+
+    def test_syslog_ip_extraction_skips_private_addresses(self):
+        self.assertEqual(self.s.syslog_ip("Connection closed by invalid user x 2.57.122.238 port 1 [preauth]"), "2.57.122.238")
+        self.assertIsNone(self.s.syslog_ip("Accepted publickey for a from 192.168.1.5 port 22"))
+        self.assertIsNone(self.s.syslog_ip("from 100.123.152.25 port 22"))      # Tailscale / CGNAT
+        self.assertIsNone(self.s.syslog_ip("version 1.2.3.4.5 build"))
+
+    def test_one_failing_attacker_source_does_not_blank_the_map(self):
+        g = self.s.build_geo(60, "all")                                          # fake rejects the attacker queries
+        self.assertEqual(g["total"], 1000)
+
+    def test_cache_is_per_type(self):
+        self.s.api_geo(60, dtype="all")
+        n = len(self.calls)
+        self.s.api_geo(60, dtype="firewall-sophos-xg")
+        self.assertGreater(len(self.calls), n)                                  # different type: its own query
+
     def test_window_is_clamped_and_cached(self):
         self.s.api_geo(60)
         n = len(self.calls)
@@ -209,6 +276,27 @@ class Packaging(unittest.TestCase):
     def test_land_outline_is_shipped(self):
         with open(os.path.join(ROOT, "app", "land.json")) as f:
             self.assertGreater(len(json.load(f)["rings"]), 100)
+
+    def test_vpn_ranges_and_tor_take_priority_and_private_ips_are_never_looked_up(self):
+        import tempfile, geoip
+        gi = geoip.GeoIP(tempfile.mkdtemp(), online_daily=0)
+        for kind, text in (("vpn", "5.6.7.0/24\n# comment\n2001:db8::/32\n"), ("hosting", "5.6.0.0/16\n"), ("tor", "5.6.7.8\n")):
+            r = geoip.parse_ranges(text); gi.ranges[kind] = (r, [a for a, _ in r])
+        self.assertEqual(gi.net_kind("5.6.7.8"), "tor")
+        self.assertEqual(gi.net_kind("5.6.7.9"), "vpn")
+        self.assertEqual(gi.net_kind("5.6.9.1"), "hosting")
+        self.assertIsNone(gi.net_kind("8.8.8.8"))
+        self.assertIsNone(gi.lookup("10.1.2.3"))
+        self.assertTrue(gi._q.empty())                                         # private: no online lookup queued either
+
+    def test_street_map_assets_are_shipped_and_only_the_tile_host_is_allowed(self):
+        s = load_server()
+        for path in s.STATIC_FILES:
+            self.assertTrue(os.path.getsize(os.path.join(ROOT, "app", path[1:])) > 10000, path)
+        with open(os.path.join(ROOT, "app", "index.html")) as f:
+            page = f.read()
+        self.assertIn(s.TILE_HOST + "/styles/", page)
+        self.assertEqual(s.TILE_HOST, "https://tiles.openfreemap.org")
 
 if __name__ == "__main__":
     unittest.main()

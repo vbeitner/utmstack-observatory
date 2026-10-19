@@ -37,6 +37,9 @@ button{font-family:inherit;color:inherit;background:none;border:0;cursor:pointer
   .board>[data-widget]{grid-column:auto!important;grid-row:auto!important;min-height:var(--mobile-h,320px)}
   .board>[data-widget="kpis"]{--mobile-h:auto}
   .board>[data-widget="rate"]{--mobile-h:auto}
+  .board>[data-widget="map"]{--mobile-h:max(520px,72vh)}
+  .map-filters .seg{max-width:100%;overflow-x:auto}
+  .map-filters .seg button{flex:none}
   #editBtn{display:none}
 }
 .panel{background:var(--s1);border:1px solid var(--border);position:relative}
@@ -112,6 +115,8 @@ button{font-family:inherit;color:inherit;background:none;border:0;cursor:pointer
 .dl .p{color:var(--ink);font-variant-numeric:tabular-nums}
 .top5-body{padding:12px 16px 14px;display:flex;flex-direction:column;gap:11px;overflow:auto;flex:1;min-height:0}
 .bar-row{display:grid;grid-template-columns:minmax(0,1fr) 62px;gap:10px;align-items:center}
+.bar-row.clk{cursor:pointer}
+.bar-row.clk:hover,.bar-row.clk:focus-visible{background:var(--s2);outline:none}
 .bar-name{display:flex;justify-content:space-between;gap:8px;font-family:var(--mono);font-size:12.5px;color:var(--ink2);margin-bottom:5px}
 .bar-name span:first-child{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .bar-name .call{color:var(--muted);font-size:11.5px;flex:none}
@@ -270,12 +275,30 @@ details.ev .kvt{margin:4px 0 8px}
 }
 /* ---------- live firewall map ---------- */
 .map-panel{display:flex;flex-direction:column;min-height:0;overflow:hidden}
-.map-body{flex:1;min-height:0;display:grid;grid-template-columns:minmax(0,1fr) 310px}
-.map-wrap{position:relative;min-height:0;overflow:hidden;background:radial-gradient(ellipse at 50% 40%,#0B1622 0%,var(--canvas) 75%)}
+.map-filters{height:auto;min-height:50px;gap:10px;flex-wrap:wrap;padding:8px 16px}
+.map-body{flex:1;min-height:0;display:flex}
+.map-wrap{position:relative;flex:1;min-height:0;overflow:hidden;background:radial-gradient(ellipse at 50% 40%,#0B1622 0%,var(--canvas) 75%)}
 .map-wrap canvas{position:absolute;inset:0;width:100%;height:100%;display:block}
 .map-legend{position:absolute;left:12px;bottom:10px;display:flex;flex-wrap:wrap;gap:14px;font-family:var(--mono);font-size:11.5px;color:var(--ink2);background:rgba(7,10,15,.78);border:1px solid var(--border);padding:5px 9px}
 .map-legend i{display:inline-block;width:14px;height:2px;margin-right:6px;vertical-align:middle}
-.map-side{border-left:1px solid var(--border);padding:12px 14px;overflow:auto;display:flex;flex-direction:column;gap:12px;min-height:0}
+#mapBase{position:absolute;inset:0}
+.map-wrap.has-base #mapCanvas{pointer-events:none}
+.map-wrap .maplibregl-ctrl-attrib{font-size:10.5px}
+.netb{display:inline-block;margin-left:5px;padding:0 5px;border:1px solid currentColor;border-radius:3px;font-family:var(--mono);font-size:10.5px;line-height:15px;vertical-align:1px}
+.netb-vpn{color:#FFC857}.netb-tor{color:#C792EA}.netb-hosting{color:#8FB8D0}
+.tk-type{color:var(--muted);font-family:var(--mono);font-size:11px;text-transform:capitalize}
+.map-zoom{position:absolute;right:12px;bottom:10px;z-index:3;display:flex;flex-direction:column;gap:4px}
+.map-zoom button{width:34px;height:34px;border:1px solid var(--border-strong);background:rgba(7,10,15,.85);color:var(--ink);font-family:var(--mono);font-size:18px;line-height:1;cursor:pointer}
+.map-zoom button:hover,.map-zoom button:focus-visible{border-color:var(--cyan);color:var(--cyan)}
+.map-legend{max-width:calc(100% - 80px)}
+#mapCanvas.zoomed{cursor:grab}
+#mapCanvas.zoomed:active{cursor:grabbing}
+body.wall .map-zoom{display:none}
+.map-fallback{position:absolute;top:10px;left:12px;right:12px;z-index:3;display:flex;align-items:center;gap:12px;flex-wrap:wrap;padding:8px 12px;background:rgba(7,10,15,.85);border:1px solid var(--border)}
+.map-fallback[hidden]{display:none}           /* display:flex above would otherwise beat the hidden attribute */
+.map-fallback p{margin:0;flex:1;min-width:200px;color:var(--ink2);font-size:13.5px;line-height:1.45}
+.mapside-panel{display:flex;flex-direction:column;min-height:0;overflow:hidden}
+.map-side{padding:12px 14px;overflow:auto;display:flex;flex-direction:column;gap:12px;min-height:0;flex:1}
 .map-stats{display:grid;grid-template-columns:1fr 1fr;gap:10px 12px}
 .map-stats .k{font-family:var(--mono);font-size:11.5px;letter-spacing:.1em;color:var(--muted)}
 .map-stats .v{font-family:var(--display);font-size:28px;font-weight:700;line-height:1.05;font-variant-numeric:tabular-nums}
@@ -294,10 +317,6 @@ details.ev .kvt{margin:4px 0 8px}
 .tk.new{animation:tkIn 1.6s ease-out}
 @keyframes tkIn{from{background:var(--red-soft)}to{background:transparent}}
 .map-note{font-family:var(--mono);font-size:11.5px;color:var(--muted);line-height:1.5}
-@media (max-width:1099px){
-  .map-body{grid-template-columns:1fr;grid-template-rows:minmax(340px,1fr) auto}
-  .map-side{border-left:0;border-top:1px solid var(--border)}
-}
 /* ---------- wall display mode ---------- */
 body.wall .shell{height:100dvh;min-height:0;overflow:hidden}
 body.wall #tabbar,body.wall #boardNotes{display:none}
@@ -306,7 +325,6 @@ body.wall .board>[data-wall-hidden]>*{visibility:hidden}
 body.wall .board>[data-wall-hidden]::after{content:"Hidden on the wall screen: contains client names";position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font-family:var(--mono);font-size:13px;color:var(--muted);border:1px dashed var(--border-strong)}
 .board>[data-widget]{position:relative}
 body.wall #kSrcSec{visibility:hidden}
-body.wall .map-body{grid-template-columns:minmax(0,1fr) 380px}
 body.wall .map-stats .v{font-size:40px}
 body.wall .map-side h3{font-size:17px}
 body.wall .mc-row,body.wall .tk{font-size:16px}
@@ -345,10 +363,8 @@ body.editing .edit-bar{display:flex}
 .hdr-ctrl .seg button{padding:0 11px}
 .res{grid-template-columns:minmax(0,1fr) auto}
 .res-sub{white-space:nowrap}
-.map-body{grid-template-columns:minmax(0,1fr) 340px}
 .map-stats .k{white-space:nowrap;letter-spacing:.04em}
 .tk{grid-template-columns:72px minmax(0,1fr)}
-.map-body{grid-template-columns:minmax(0,1fr) 290px}
 .num{font-size:clamp(44px,4.6vw,72px)}
 .kpi{padding:16px 22px 18px}
 @media (max-width:1599px){ .truth.opt,#trendUpdated{display:none} }
@@ -356,6 +372,7 @@ body.editing .edit-bar{display:flex}
 body.paused .mark-core,body.paused .tk.new,body.paused .live-dot{animation-play-state:paused}
 @media (prefers-reduced-motion:reduce){*,*::before,*::after{animation-duration:.001ms!important;transition-duration:.001ms!important}}
 </style>
+<link rel="stylesheet" href="/maplibre-gl.css">
 </head>
 <body>
 <div class="shell">
@@ -443,20 +460,47 @@ body.paused .mark-core,body.paused .tk.new,body.paused .live-dot{animation-play-
           <button data-w="60" aria-pressed="true">1 min</button><button data-w="300" aria-pressed="false">5 min</button><button data-w="900" aria-pressed="false">15 min</button>
         </div>
       </div>
+      <div class="panel-head map-filters">
+        <div class="seg" id="mapTypeSeg" role="group" aria-label="Data source type">
+          <button data-type="all" aria-pressed="true">All</button><button data-type="firewall-sophos-xg" aria-pressed="false">Firewall</button><button data-type="o365" aria-pressed="false">M365</button><button data-type="google" aria-pressed="false">Google</button><button data-type="wineventlog" aria-pressed="false">Windows</button><button data-type="linux" aria-pressed="false">Linux</button><button data-type="syslog" aria-pressed="false">Syslog</button>
+        </div>
+        <div class="seg" id="mapDirSeg" role="group" aria-label="Traffic direction">
+          <button data-dir="all" aria-pressed="true">All</button><button data-dir="in" aria-pressed="false">Inbound</button><button data-dir="out" aria-pressed="false">Outbound</button>
+        </div>
+        <div class="seg" id="mapOutSeg" role="group" aria-label="Allowed or denied traffic">
+          <button data-out="all" aria-pressed="true">All</button><button data-out="allowed" aria-pressed="false">Allowed</button><button data-out="denied" aria-pressed="false">Denied</button>
+        </div>
+      </div>
       <div class="map-body">
         <div class="map-wrap" id="mapWrap">
+          <div id="mapBase"></div>
           <canvas id="mapCanvas" role="img" aria-label="World map of firewall connections: arcs from each firewall to the remote cities it is talking to."></canvas>
           <div class="tt" id="mapTip"></div>
           <div class="map-legend" aria-hidden="true"><span><i style="background:#35E7FF"></i>Outbound</span><span><i style="background:#68F5B1"></i>Inbound allowed</span><span><i style="background:#FF4D5E"></i>Denied</span><span><i style="background:#EAF7FF;height:6px;width:6px;border-radius:50%"></i>Firewall</span></div>
-        </div>
-        <div class="map-side">
-          <div class="map-stats" id="mapStats"></div>
-          <div><h3>Top countries</h3><div id="mapCountries"><div class="map-note">Loading…</div></div></div>
-          <div><h3>Latest blocked inbound</h3><div id="mapTicker"><div class="map-note">Loading…</div></div></div>
-          <div class="map-note" id="mapNote"></div>
+          <div class="map-zoom" role="group" aria-label="Map zoom">
+            <button id="mapZoomIn" aria-label="Zoom in" title="Zoom in (or scroll / pinch)">+</button>
+            <button id="mapZoomOut" aria-label="Zoom out" title="Zoom out">−</button>
+            <button id="mapZoomReset" aria-label="Reset zoom" title="Show the whole map">⟲</button>
+          </div>
+          <div class="map-fallback" id="mapFallback" hidden>
+            <p id="mapFallbackText"></p>
+            <button class="ghost-btn" id="mapFallbackBtn">View this source's events</button>
+          </div>
         </div>
       </div>
       <p class="sr-only" id="mapSummary" aria-live="polite"></p>
+    </section>
+
+    <section class="panel mapside-panel" id="mapSidePanel" aria-labelledby="mapSideTitle" data-widget="mapside">
+      <div class="panel-head">
+        <span class="panel-title" id="mapSideTitle">Map Stats</span>
+      </div>
+      <div class="map-side">
+        <div class="map-stats" id="mapStats"></div>
+        <div><h3>Top countries</h3><div id="mapCountries"><div class="map-note">Loading…</div></div></div>
+        <div><h3 id="mapTickerTitle">Latest blocked inbound</h3><div id="mapTicker"><div class="map-note">Loading…</div></div></div>
+        <div class="map-note" id="mapNote"></div>
+      </div>
     </section>
 
     <section class="panel" aria-labelledby="donutTitle" data-widget="donut">
@@ -597,6 +641,7 @@ body.paused .mark-core,body.paused .tk.new,body.paused .live-dot{animation-play-
   <div class="drawer-body" id="repBody"><div class="empty">Loading…</div></div>
 </aside>
 
+<script src="/maplibre-gl.js"></script>
 <script src="/layout.js"></script>
 <script>
 (function(){
@@ -614,8 +659,8 @@ body.paused .mark-core,body.paused .tk.new,body.paused .live-dot{animation-play-
   }
   function clamp(v,a,b){return Math.max(a,Math.min(b,v))}
   function esc(s){return String(s==null?'':s).replace(/[&<>"']/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]})}
-  function fit(cv){
-    var r = cv.getBoundingClientRect(), d = Math.min(window.devicePixelRatio||1,2);
+  function fit(cv, maxD){
+    var r = cv.getBoundingClientRect(), d = Math.min(window.devicePixelRatio||1, maxD||2);
     var w = Math.max(1,r.width), h = Math.max(1,r.height);
     if(cv.width !== Math.round(w*d) || cv.height !== Math.round(h*d)){ cv.width = Math.round(w*d); cv.height = Math.round(h*d); }
     var ctx = cv.getContext('2d'); ctx.setTransform(d,0,0,d,0,0);
@@ -758,7 +803,7 @@ body.paused .mark-core,body.paused .tk.new,body.paused .live-dot{animation-play-
     if(!rules.length){ body.innerHTML = '<div class="empty">No alerts in the last '+rl()+'.</div>'; return; }
     var max = rules[0].count || 1;
     body.innerHTML = rules.map(function(r){
-      return '<div class="bar-row"><div><div class="bar-name"><span title="'+esc(r.name)+'">'+esc(r.name)+'</span></div>'+
+      return '<div class="bar-row clk" tabindex="0" data-rule="'+esc(r.name)+'"><div><div class="bar-name"><span title="'+esc(r.name)+'">'+esc(r.name)+'</span></div>'+
         '<div class="track"><div class="fill" style="width:'+Math.max(6,r.count/max*100)+'%;background:'+sevColor(r.sev)+'"></div></div></div>'+
         '<div><div class="bar-val" style="color:'+sevColor(r.sev)+'">'+nf0.format(r.count)+'</div><div class="bar-state">'+esc(String(r.sev).toUpperCase())+'</div></div></div>';
     }).join('');
@@ -963,11 +1008,21 @@ body.paused .mark-core,body.paused .tk.new,body.paused .live-dot{animation-play-
   /* ---------- live firewall map ---------- */
   var mapCv = $('#mapCanvas'), mapTip = $('#mapTip'), mapWrap = $('#mapWrap');
   var LAND = null, G = null, mapWin = 60, mapAnon = false, mapHits = [], landCache = null, seenTicks = {};
+  var mapType = 'all', mapDir = 'all', mapOut = 'all';
+  // types whose logs carry origin/target geolocation (keep in step with GEO_TYPES in server.py); the rest get a note
+  var GEO_TYPES = {'all': true, 'firewall-sophos-xg': true, 'o365': true, 'google': true, 'linux': true, 'syslog': true, 'wineventlog': true};
+  var NET_LABEL = {vpn: 'VPN', tor: 'Tor', hosting: 'Hosting'};
+  function netBadge(n){ return n ? ' <span class="netb netb-'+n+'" title="'+(n==='hosting' ? 'Datacenter / hosting range (often a VPN or VPS)' : n==='tor' ? 'Tor exit node' : 'Known VPN range')+'">'+NET_LABEL[n]+'</span>' : ''; }
+  var MAP_TYPE_LABEL = {'all': 'all sources', 'firewall-sophos-xg': 'firewall', 'o365': 'Microsoft 365', 'google': 'Google',
+                        'wineventlog': 'Windows', 'linux': 'Linux', 'syslog': 'syslog'};
   var reduceMotion = !!(window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches);
   var C_OUT = '#35E7FF', C_IN = '#68F5B1', C_DENY = '#FF4D5E', C_PIN = '#FFC857';
   var HOVER_ZOOM = 3.2;
   var hoverPin = null;                             // {lat, lon, label} while a row with coordinates is hovered
   var camX = 0, camY = 0, camZ = 1;                 // eased camera focus (base-projection pixels) and zoom
+  var userZ = 1, userX = null, userY = null, viewW = 0, viewH = 0, snapCam = false, MAX_ZOOM = 8;   // user's own zoom/pan
+  var BASE = null, WORLD = [[-170, -56], [180, 78]], pinPrevView = null;
+  var MAP_DPR = Math.min(window.devicePixelRatio || 1, 1.25);   // street map + arc layer resolution: lighter on GPUs   // MapLibre street map, once it has loaded
   fetch('/land.json', {cache:'force-cache'}).then(function(r){ return r.json(); })
     .then(function(d){ LAND = d.rings; landCache = null; drawMap(frameT()); }).catch(function(){});
 
@@ -980,26 +1035,49 @@ body.paused .mark-core,body.paused .tk.new,body.paused .live-dot{animation-play-
     var ox = w/2 - (c+180)*s, oy = (h - latSpan*s)/2;
     return function(lon, lat){ return [ox + (lon+180)*s, oy + (latN-lat)*s]; };
   }
-  function landLayer(w, h, d){
-    if(landCache && landCache.w===w && landCache.h===h) return landCache.cv;
-    var cv = document.createElement('canvas'); cv.width = Math.round(w*d); cv.height = Math.round(h*d);
-    var ctx = cv.getContext('2d'); ctx.setTransform(d,0,0,d,0,0);
-    var P = view(w, h);
-    ctx.strokeStyle = 'rgba(53,231,255,.06)'; ctx.lineWidth = 1;          // graticule
+  function drawLand(ctx, P, z){
+    ctx.strokeStyle = 'rgba(53,231,255,.06)'; ctx.lineWidth = 1/z;        // graticule
     for(var lo=-180; lo<=180; lo+=30){ var a=P(lo,78), b=P(lo,-56); ctx.beginPath(); ctx.moveTo(a[0],a[1]); ctx.lineTo(b[0],b[1]); ctx.stroke(); }
     for(var la=-30; la<=60; la+=30){ var c=P(-180,la), e=P(180,la); ctx.beginPath(); ctx.moveTo(c[0],c[1]); ctx.lineTo(e[0],e[1]); ctx.stroke(); }
     if(LAND){
-      ctx.fillStyle = '#0F2131'; ctx.strokeStyle = '#1E3A50'; ctx.lineWidth = .8;
+      ctx.fillStyle = '#0F2131'; ctx.strokeStyle = '#1E3A50'; ctx.lineWidth = .8/z;
       LAND.forEach(function(r){
         ctx.beginPath();
         for(var i=0;i<r.length;i+=2){ var p = P(r[i], r[i+1]); if(i) ctx.lineTo(p[0],p[1]); else ctx.moveTo(p[0],p[1]); }
         ctx.closePath(); ctx.fill(); ctx.stroke();
       });
     }
+  }
+  function landLayer(w, h, d){
+    if(landCache && landCache.w===w && landCache.h===h) return landCache.cv;
+    var cv = document.createElement('canvas'); cv.width = Math.round(w*d); cv.height = Math.round(h*d);
+    var ctx = cv.getContext('2d'); ctx.setTransform(d,0,0,d,0,0);
+    drawLand(ctx, view(w, h), 1);
     landCache = {w:w, h:h, cv:cv};
     return cv;
   }
   function arcColor(a){ return a.denied*2 >= a.count ? C_DENY : (a.dir==='in' ? C_IN : C_OUT); }
+  function dirArcs(){
+    if(!G) return [];
+    var out = [];
+    G.arcs.forEach(function(a){
+      if(mapDir!=='all' && a.dir!==mapDir) return;
+      if(mapOut==='all'){ out.push(a); return; }
+      var n = mapOut==='denied' ? a.denied : a.count - a.denied;
+      if(n > 0) out.push(Object.assign({}, a, {count:n, denied: mapOut==='denied' ? n : 0}));
+    });
+    return out;
+  }
+  function dirCountries(){
+    if(!G) return [];
+    if(mapDir==='all' && mapOut==='all') return G.countries;
+    var by = {};
+    dirArcs().forEach(function(a){
+      var c = by[a.cc] || (by[a.cc] = {cc:a.cc, country:a.country, count:0, denied:0, 'in':0, out:0});
+      c.count += a.count; c.denied += a.denied; c[a.dir] += a.count;
+    });
+    return Object.keys(by).map(function(k){ return by[k]; }).sort(function(a,b){ return b.count-a.count; }).slice(0,12);
+  }
   function bez(p0, p1, c, t){
     var u = 1-t; return [u*u*p0[0]+2*u*t*c[0]+t*t*p1[0], u*u*p0[1]+2*u*t*c[1]+t*t*p1[1]];
   }
@@ -1011,28 +1089,40 @@ body.paused .mark-core,body.paused .tk.new,body.paused .live-dot{animation-play-
 
   function drawMap(now){
     if(!mapCv.offsetParent) return;                     // panel hidden (wall mode on another view)
-    var f = fit(mapCv), ctx = f.ctx, w = f.w, h = f.h, d = Math.min(window.devicePixelRatio||1,2);
+    var f = fit(mapCv, BASE ? MAP_DPR : 2), ctx = f.ctx, w = f.w, h = f.h, d = Math.min(window.devicePixelRatio||1,2);
     ctx.clearRect(0,0,w,h);
-    var P = view(w, h);
-    var tz = 1, tx = w/2, ty = h/2;
-    if(hoverPin && hoverPin.lat!=null && hoverPin.lon!=null){
-      var fp = P(hoverPin.lon, hoverPin.lat); tz = HOVER_ZOOM; tx = fp[0]; ty = fp[1];
+    var P, tz, tx, ty;
+    if(BASE){                                            // street basemap owns zoom/pan: project through it, no camera
+      P = function(lon, lat){ var q = BASE.project([lon, lat]); return [q.x, q.y]; };
+      camZ = 1; camX = tx = w/2; camY = ty = h/2; viewW = w; viewH = h;
+      if(hoverPin && hoverPin.lat!=null && hoverPin.lon!=null){ var bp = P(hoverPin.lon, hoverPin.lat); tx = bp[0]; ty = bp[1]; }
+    } else {
+      P = view(w, h);
+      if(userX==null || viewW!==w || viewH!==h){ userZ = 1; userX = w/2; userY = h/2; viewW = w; viewH = h; }
+      tz = userZ; tx = userX; ty = userY;
+      if(hoverPin && hoverPin.lat!=null && hoverPin.lon!=null){
+        var fp = P(hoverPin.lon, hoverPin.lat); tz = Math.max(HOVER_ZOOM, userZ); tx = fp[0]; ty = fp[1];
+      }
+      if(liveOn && !snapCam){ camZ += (tz-camZ)*.15; camX += (tx-camX)*.15; camY += (ty-camY)*.15; }
+      else { camZ = tz; camX = tx; camY = ty; snapCam = false; }
     }
-    if(liveOn){ camZ += (tz-camZ)*.15; camX += (tx-camX)*.15; camY += (ty-camY)*.15; }
-    else { camZ = tz; camX = tx; camY = ty; }
+    var toScr = function(p){ return [w/2 + camZ*(p[0]-camX), h/2 + camZ*(p[1]-camY)]; };
     ctx.save(); ctx.translate(w/2, h/2); ctx.scale(camZ, camZ); ctx.translate(-camX, -camY);
-    ctx.drawImage(landLayer(w,h,d), 0, 0, w, h);
+    if(!BASE){
+      if(camZ > 1.05) drawLand(ctx, P, camZ);             // vector land stays sharp when zoomed in
+      else ctx.drawImage(landLayer(w,h,d), 0, 0, w, h);
+    }
     if(!G || !G.sites){ ctx.restore(); return; }
-    var byId = {}, maxC = 1, t = (now||0)/1000;
+    var byId = {}, maxC = 1, t = (now||0)/1000, arcs = dirArcs();
     G.sites.forEach(function(s){ byId[s.id] = s; s._p = P(s.lon, s.lat); });
-    G.arcs.forEach(function(a){ if(a.count>maxC) maxC = a.count; });
-    if(!hoverPin) mapHits = [];                          // zoomed/panned: screen-space hit-testing below would be wrong
+    arcs.forEach(function(a){ if(a.count>maxC) maxC = a.count; });
+    if(!hoverPin) mapHits = [];                          // hit targets are kept in screen pixels (see toScr)
     var ends = {};
-    G.arcs.forEach(function(a, i){
+    arcs.forEach(function(a, i){
       var s = byId[a.site]; if(!s) return;
       var p0 = s._p, p1 = P(a.lon, a.lat), col = arcColor(a), wgt = Math.log(1+a.count)/Math.log(1+maxC);
-      var key = a.lat+','+a.lon, e = ends[key] || (ends[key] = {p:p1, count:0, denied:0, city:a.city, country:a.country, cc:a.cc, sites:{}});
-      e.count += a.count; e.denied += a.denied; e.sites[s.name] = (e.sites[s.name]||0) + a.count;
+      var key = a.lat+','+a.lon, e = ends[key] || (ends[key] = {p:p1, count:0, denied:0, vpn:0, city:a.city, country:a.country, cc:a.cc, sites:{}});
+      e.count += a.count; e.denied += a.denied; e.vpn += a.vpn||0; e.sites[s.name] = (e.sites[s.name]||0) + a.count;
       var dx = p1[0]-p0[0], dy = p1[1]-p0[1];
       if(dx*dx+dy*dy < 9) return;                        // same metro area: endpoint dot only
       var c = ctrl(p0, p1);
@@ -1056,7 +1146,7 @@ body.paused .mark-core,body.paused .tk.new,body.paused .live-dot{animation-play-
         ctx.strokeStyle = hexA(C_DENY, .55*(1-pulse)); ctx.lineWidth = 1.2/camZ; ctx.stroke();
       }
       ctx.beginPath(); ctx.arc(e.p[0], e.p[1], r, 0, Math.PI*2); ctx.fillStyle = hexA(col, .85); ctx.fill();
-      if(!hoverPin) mapHits.push({x:e.p[0], y:e.p[1], r:Math.max(7,r+3), kind:'remote', e:e});
+      if(!hoverPin){ var q = toScr(e.p); mapHits.push({x:q[0], y:q[1], r:Math.max(7, r*camZ+3), kind:'remote', e:e}); }
     });
     G.sites.forEach(function(s){                          // firewalls on top
       var p = s._p, busy = s.total ? Math.min(1, Math.log(1+s.total)/Math.log(1+3000)) : 0, r = (3.5 + 3*busy)/camZ;
@@ -1066,7 +1156,7 @@ body.paused .mark-core,body.paused .tk.new,body.paused .live-dot{animation-play-
       }
       ctx.beginPath(); ctx.arc(p[0], p[1], r+3/camZ, 0, Math.PI*2); ctx.fillStyle = 'rgba(53,231,255,.18)'; ctx.fill();
       ctx.beginPath(); ctx.arc(p[0], p[1], r, 0, Math.PI*2); ctx.fillStyle = s.total ? '#EAF7FF' : '#8299AB'; ctx.fill();
-      if(!hoverPin) mapHits.push({x:p[0], y:p[1], r:Math.max(9,r+4), kind:'site', s:s});
+      if(!hoverPin){ var q2 = toScr(p); mapHits.push({x:q2[0], y:q2[1], r:Math.max(9, r*camZ+4), kind:'site', s:s}); }
     });
     ctx.restore();
     if(hoverPin){                                         // the focus point rides toward screen centre as the camera eases in
@@ -1076,7 +1166,11 @@ body.paused .mark-core,body.paused .tk.new,body.paused .live-dot{animation-play-
       positionPinTip(mx, my);
     }
   }
-  function mapLoop(now){ if(liveOn) drawMap(now); if(!reduceMotion) requestAnimationFrame(mapLoop); }
+  var lastMapDraw = 0;
+  function mapLoop(now){                                // ~30 fps idle animation; while the street map moves, its render event draws
+    if(liveOn && !(BASE && BASE.isMoving()) && now - lastMapDraw >= 32){ lastMapDraw = now; drawMap(now); }
+    if(!reduceMotion) requestAnimationFrame(mapLoop);
+  }
   requestAnimationFrame(mapLoop);
   window.addEventListener('resize', function(){ landCache = null; drawMap(frameT()); });
 
@@ -1087,35 +1181,51 @@ body.paused .mark-core,body.paused .tk.new,body.paused .live-dot{animation-play-
     $('#mapStats').innerHTML =
       '<div><div class="k">CONNS / MIN</div><div class="v">'+nf0.format(g.per_min)+'</div></div>'+
       '<div><div class="k">DENIED</div><div class="v" style="color:'+(dr>=30?'#FF8A95':'#EAF7FF')+'">'+dr.toFixed(1)+'<span class="unit">%</span></div></div>'+
-      '<div><div class="k">FIREWALLS ACTIVE</div><div class="v">'+act+'<span class="unit">/ '+g.sites.length+'</span></div></div>'+
+      '<div><div class="k">'+(mapType==='firewall-sophos-xg' ? 'FIREWALLS' : 'SOURCES')+' ACTIVE</div><div class="v">'+act+'<span class="unit">/ '+g.sites.length+'</span></div></div>'+
       '<div><div class="k">DATA AGE</div><div class="v">'+(g.age_s==null?'–':ago(g.age_s))+'</div></div>';
-    var maxC = g.countries.length ? g.countries[0].count : 1;
-    $('#mapCountries').innerHTML = g.countries.length ? g.countries.slice(0,8).map(function(c){
+    var countries = dirCountries();
+    var maxC = countries.length ? countries[0].count : 1;
+    $('#mapCountries').innerHTML = countries.length ? countries.slice(0,8).map(function(c){
       return '<div class="mc-row" title="'+esc(c.country)+': '+nf0.format(c.count)+' connections, '+nf0.format(c.denied)+' denied (in '+c['in']+' / out '+c.out+')">'+
         '<span>'+flag(c.cc)+'</span><span class="n">'+esc(c.country||c.cc)+'</span><span class="c">'+compact(c.count)+'</span>'+
         '<span class="dbar" title="denied share"><i style="width:'+(c.count? c.denied/c.count*100 : 0)+'%"></i></span></div>';
     }).join('') : '<div class="map-note">No geolocated traffic in the last '+winLbl+'.</div>';
     var fresh = {};
+    $('#mapTickerTitle').textContent = mapType==='firewall-sophos-xg' ? 'Latest blocked inbound' : 'Latest blocked / failed inbound';
     $('#mapTicker').innerHTML = g.ticker.length ? g.ticker.slice(0,10).map(function(x){
       var key = x.t+x.ip, isNew = !seenTicks[key]; fresh[key] = 1;
       var where = [x.city, x.country].filter(Boolean).join(', ') || x.cc || '';
       var geo = x.lat!=null && x.lon!=null ? ' data-lat="'+x.lat+'" data-lon="'+x.lon+'" data-ip="'+esc(x.ip||'')+'" data-sub="'+esc(where+' → '+x.site)+'" tabindex="0" role="button" aria-label="Look up '+esc(x.ip||'')+'"' : '';
       return '<div class="tk'+(isNew && Object.keys(seenTicks).length ? ' new' : '')+'"'+geo+'><span class="t">'+hhmmss(new Date(x.t))+'</span>'+
-        '<span class="w"><span class="ip">'+esc(x.ip)+'</span> '+flag(x.cc)+' '+esc(where)+' → '+esc(x.site)+(x.port?' :'+esc(x.port):'')+'</span></div>';
+        '<span class="w"><span class="ip">'+esc(x.ip)+'</span>'+netBadge(x.net)+' '+flag(x.cc)+' '+esc(where)+' → '+esc(x.site)+(x.port?' :'+esc(x.port):'')+
+        (mapType==='all' && x.type ? ' <span class="tk-type">'+esc(MAP_TYPE_LABEL[x.type]||x.type)+'</span>' : '')+'</span></div>';
     }).join('') : '<div class="map-note">No blocked inbound connections in the last '+winLbl+'.</div>';
     seenTicks = fresh;
     var home = g.sites.filter(function(s){ return s.loc_source==='home'; });
     $('#mapNote').textContent = (g.anonymized ? 'Wall mode: firewall names hidden. ' : '') +
-      (home.length && !g.anonymized ? home.length+' firewall'+(home.length>1?'s have':' has')+' no known location and '+(home.length>1?'are':'is')+' shown at '+(g.home.city||'home')+' ('+home.map(function(s){return s.name;}).join(', ')+'). Set it with install.sh --sites. ' : '') +
+      (home.length && !g.anonymized ? home.length+' source'+(home.length>1?'s have':' has')+' no known location and '+(home.length>1?'are':'is')+' shown at '+(g.home.city||'home')+' ('+home.slice(0,6).map(function(s){return s.name;}).join(', ')+(home.length>6?', …':'')+'). Set it with install.sh --sites. ' : '') +
       (g.arcs_total > g.arcs.length ? 'Showing the busiest '+g.arcs.length+' of '+g.arcs_total+' routes. ' : '') +
-      'Locations from UTMStack GeoIP; private addresses are not mapped.';
+      'Locations from UTMStack GeoIP and IP Geolocation by DB-IP (db-ip.com, CC BY 4.0); VPN/hosting ranges from X4BNet, Tor exits from the Tor Project. Private addresses are not mapped.' +
+      (g.geoip && !g.geoip.db ? ' The location database is still downloading — attackers from Linux, Syslog and Windows appear once it is ready.' : '');
     $('#mapMeta').textContent = 'Last '+winLbl+' · updated '+hhmmss(new Date(g.generated));
-    $('#mapSummary').textContent = nf0.format(g.per_min)+' firewall connections per minute, '+dr.toFixed(1)+'% denied. Top country: '+(g.countries[0] ? g.countries[0].country : 'none')+'.';
+    $('#mapSummary').textContent = nf0.format(g.per_min)+' firewall connections per minute, '+dr.toFixed(1)+'% denied. Top country: '+(countries[0] ? countries[0].country : 'none')+'.';
+  }
+  function showMapFallback(show){
+    $('#mapFallback').hidden = !show;
+    if(show){
+      var label = MAP_TYPE_LABEL[mapType] || mapType;
+      $('#mapFallbackText').textContent = 'No geolocated traffic for '+label+' — only firewall and some cloud logs carry origin/destination locations.';
+      $('#mapMeta').textContent = label+': no map data';
+      $('#mapStats').innerHTML = ''; $('#mapCountries').innerHTML = ''; $('#mapTicker').innerHTML = '';
+      $('#mapNote').textContent = 'See that source’s own events and rules instead.';
+    }
   }
   function pollGeo(){
-    fetch('/api/geo?window='+mapWin+(mapAnon?'&anon=1':''), {cache:'no-store'}).then(function(r){ return r.json(); }).then(function(g){
+    if(!GEO_TYPES[mapType]){ showMapFallback(true); return; }
+    showMapFallback(false);
+    fetch('/api/geo?window='+mapWin+'&type='+encodeURIComponent(mapType)+(mapAnon?'&anon=1':''), {cache:'no-store'}).then(function(r){ return r.json(); }).then(function(g){
       if(g.error){ $('#mapMeta').textContent = 'Map unavailable: '+g.error.slice(0,80); return; }
-      if(!!g.anonymized !== mapAnon || g.window_s !== mapWin) return;   // stale answer after a toggle
+      if(!!g.anonymized !== mapAnon || g.window_s !== mapWin || g.type !== mapType) return;   // stale answer after a toggle
       if(!liveOn){ pendingG = g; return; }
       G = g; renderMapSide(); if(reduceMotion) drawMap(0);
     }).catch(function(e){ $('#mapMeta').textContent = 'Map unreachable ('+e.message+')'; });
@@ -1124,9 +1234,23 @@ body.paused .mark-core,body.paused .tk.new,body.paused .live-dot{animation-play-
   $$('#mapWin button').forEach(function(b){ b.addEventListener('click', function(){
     mapWin = +b.dataset.w; $$('#mapWin button').forEach(function(x){ x.setAttribute('aria-pressed', String(x===b)); }); pollGeo();
   }); });
-  mapCv.addEventListener('mousemove', function(ev){
-    if(hoverPin) return;                               // a hovered row owns the tooltip and the camera right now
-    var r = mapCv.getBoundingClientRect(), x = ev.clientX-r.left, y = ev.clientY-r.top, best = null, bd = 1e9;
+  $$('#mapTypeSeg button').forEach(function(b){ b.addEventListener('click', function(){
+    mapType = b.dataset.type; $$('#mapTypeSeg button').forEach(function(x){ x.setAttribute('aria-pressed', String(x===b)); });
+    G = null; seenTicks = {}; drawMap(frameT());       // drop the previous type's arcs right away, don't wait for the answer
+    $('#mapMeta').textContent = 'Loading '+(MAP_TYPE_LABEL[mapType]||mapType)+'…';
+    pollGeo();
+  }); });
+  $$('#mapDirSeg button').forEach(function(b){ b.addEventListener('click', function(){
+    mapDir = b.dataset.dir; $$('#mapDirSeg button').forEach(function(x){ x.setAttribute('aria-pressed', String(x===b)); });
+    if(G){ renderMapSide(); drawMap(frameT()); }
+  }); });
+  $$('#mapOutSeg button').forEach(function(b){ b.addEventListener('click', function(){
+    mapOut = b.dataset.out; $$('#mapOutSeg button').forEach(function(x){ x.setAttribute('aria-pressed', String(x===b)); });
+    if(G){ renderMapSide(); drawMap(frameT()); }
+  }); });
+  $('#mapFallbackBtn').addEventListener('click', function(){ openDig({name:'sources', tab:'source', type:mapType}, true); });
+  function tipAt(x, y, r){
+    var best = null, bd = 1e9;
     mapHits.forEach(function(hh){ var dx=hh.x-x, dy=hh.y-y, dd=dx*dx+dy*dy; if(dd < hh.r*hh.r && dd < bd){ bd = dd; best = hh; } });
     if(!best){ mapTip.classList.remove('on'); return; }
     var html;
@@ -1136,13 +1260,108 @@ body.paused .mark-core,body.paused .tk.new,body.paused .live-dot{animation-play-
     } else {
       var e = best.e, top = Object.keys(e.sites).sort(function(a,b){ return e.sites[b]-e.sites[a]; }).slice(0,3);
       html = '<b style="color:#EAF7FF">'+flag(e.cc)+' '+esc([e.city, e.country].filter(Boolean).join(', '))+'</b><br>'+nf0.format(e.count)+' connections · '+
-        '<span style="color:'+(e.denied?'#FF8A95':'inherit')+'">'+nf0.format(e.denied)+' denied</span><br>via '+top.map(esc).join(', ');
+        '<span style="color:'+(e.denied?'#FF8A95':'inherit')+'">'+nf0.format(e.denied)+' blocked</span>'+
+        (e.vpn ? '<br><span style="color:#FFC857">'+nf0.format(e.vpn)+' from VPN / hosting / Tor addresses</span>' : '')+'<br>via '+top.map(esc).join(', ');
     }
     mapTip.innerHTML = html; mapTip.classList.add('on');
     var tw = mapTip.offsetWidth, th = mapTip.offsetHeight;
-    mapTip.style.left = Math.min(r.width-tw-6, x+14)+'px'; mapTip.style.top = Math.max(6, Math.min(r.height-th-6, y-th-8))+'px';
+    mapTip.style.left = Math.max(6, Math.min(r.width-tw-6, x+14))+'px'; mapTip.style.top = Math.max(6, Math.min(r.height-th-6, y-th-8))+'px';
+  }
+  mapCv.addEventListener('mousemove', function(ev){
+    if(hoverPin || drag) return;                       // a hovered row owns the tooltip and the camera; no tips mid-drag
+    var r = mapCv.getBoundingClientRect();
+    tipAt(ev.clientX-r.left, ev.clientY-r.top, r);
   });
   mapCv.addEventListener('mouseleave', function(){ if(!hoverPin) mapTip.classList.remove('on'); });
+
+  /* ---- zoom and pan: buttons, wheel, double-click, drag, pinch; a tap shows the tooltip on touch screens ---- */
+  function redrawMap(){ mapCv.style.touchAction = userZ > 1 ? 'none' : 'pan-y'; mapCv.classList.toggle('zoomed', userZ > 1);
+                        if(!liveOn || reduceMotion) drawMap(frameT()); }
+  function clampView(){
+    var hw = viewW/(2*userZ), hh = viewH/(2*userZ);
+    userX = Math.max(hw, Math.min(viewW-hw, userX)); userY = Math.max(hh, Math.min(viewH-hh, userY));
+  }
+  function zoomAt(f, sx, sy, snap){                   // keep the map point under (sx, sy) fixed while zooming
+    if(userX==null || !viewW) return;
+    var nz = Math.max(1, Math.min(MAX_ZOOM, userZ*f));
+    var bx = userX + (sx - viewW/2)/userZ, by = userY + (sy - viewH/2)/userZ;
+    userZ = nz; userX = bx - (sx - viewW/2)/nz; userY = by - (sy - viewH/2)/nz;
+    clampView(); if(snap) snapCam = true; redrawMap();
+  }
+  $('#mapZoomIn').addEventListener('click', function(){ if(BASE) BASE.zoomIn(); else zoomAt(1.6, viewW/2, viewH/2); });
+  $('#mapZoomOut').addEventListener('click', function(){ if(BASE) BASE.zoomOut(); else zoomAt(1/1.6, viewW/2, viewH/2); });
+  $('#mapZoomReset').addEventListener('click', function(){
+    if(BASE){ BASE.fitBounds(WORLD, {padding:10}); return; }
+    userZ = 1; userX = viewW/2; userY = viewH/2; redrawMap();
+  });
+  mapCv.addEventListener('wheel', function(e){
+    e.preventDefault();
+    var r = mapCv.getBoundingClientRect();
+    zoomAt(Math.exp(-e.deltaY * (e.deltaMode ? 0.05 : 0.0015)), e.clientX-r.left, e.clientY-r.top, true);
+  }, {passive:false});
+  mapCv.addEventListener('dblclick', function(e){ var r = mapCv.getBoundingClientRect(); zoomAt(2, e.clientX-r.left, e.clientY-r.top); });
+  var ptrs = {}, drag = null;
+  function ptrList(){ return Object.keys(ptrs).map(function(k){ return ptrs[k]; }); }
+  mapCv.addEventListener('pointerdown', function(e){
+    if(e.pointerType==='mouse' && e.button!==0) return;
+    try { mapCv.setPointerCapture(e.pointerId); } catch(_) {}
+    ptrs[e.pointerId] = {x:e.clientX, y:e.clientY};
+    var l = ptrList();
+    drag = {moved:false, sx:e.clientX, sy:e.clientY, dist: l.length===2 ? Math.hypot(l[0].x-l[1].x, l[0].y-l[1].y) : 0};
+  });
+  mapCv.addEventListener('pointermove', function(e){
+    var p = ptrs[e.pointerId]; if(!p || !drag) return;
+    var dx = e.clientX-p.x, dy = e.clientY-p.y; p.x = e.clientX; p.y = e.clientY;
+    if(Math.abs(e.clientX-drag.sx) + Math.abs(e.clientY-drag.sy) > 6) drag.moved = true;
+    var l = ptrList(), r = mapCv.getBoundingClientRect();
+    if(l.length===2){                                  // pinch: zoom around the midpoint
+      var dist = Math.hypot(l[0].x-l[1].x, l[0].y-l[1].y);
+      if(drag.dist) zoomAt(dist/drag.dist, (l[0].x+l[1].x)/2-r.left, (l[0].y+l[1].y)/2-r.top, true);
+      drag.dist = dist; drag.moved = true;
+    } else if(l.length===1 && userZ > 1 && drag.moved){
+      userX -= dx/userZ; userY -= dy/userZ; clampView(); snapCam = true; mapTip.classList.remove('on'); redrawMap();
+    }
+  });
+  function ptrEnd(e){
+    if(!ptrs[e.pointerId]) return;
+    delete ptrs[e.pointerId];
+    if(drag && !drag.moved && e.type==='pointerup' && e.pointerType!=='mouse' && !hoverPin){
+      var r = mapCv.getBoundingClientRect(); tipAt(e.clientX-r.left, e.clientY-r.top, r);
+    }
+    if(!ptrList().length) drag = null;
+    else drag.dist = 0;                                // one finger lifted from a pinch: restart the distance
+  }
+  mapCv.addEventListener('pointerup', ptrEnd);
+  mapCv.addEventListener('pointercancel', ptrEnd);
+  redrawMap();
+
+  /* ---- street basemap (MapLibre + OpenFreeMap tiles); the outline map above stays as the fallback ---- */
+  function initBase(){
+    if(!window.maplibregl) return;
+    var ready = false, m;
+    try {
+      m = new maplibregl.Map({container: 'mapBase', style: 'https://tiles.openfreemap.org/styles/dark', bounds: WORLD,
+        pixelRatio: MAP_DPR, fadeDuration: 0,
+        fitBoundsOptions: {padding: 10}, renderWorldCopies: false, attributionControl: false, maxZoom: 18,
+        dragRotate: false, pitchWithRotate: false, touchPitch: false,
+        cooperativeGestures: !!(window.matchMedia && matchMedia('(pointer: coarse)').matches)});   // phones: 2 fingers move the map
+    } catch(e){ return; }                              // no WebGL
+    m.touchZoomRotate.disableRotation();
+    m.addControl(new maplibregl.AttributionControl({compact: true}), 'top-right');
+    var foldCredit = function(){ var c = mapWrap.querySelector('.maplibregl-ctrl-attrib'); if(c) c.classList.remove('maplibregl-compact-show'); };
+    m.on('load', function(){
+      ready = true; BASE = m; mapWrap.classList.add('has-base'); mapTip.classList.remove('on'); drawMap(frameT());
+      setTimeout(foldCredit, 0);                       // MapLibre opens the compact credit on load; start folded to (i)
+    });
+    m.on('render', function(){ if(BASE && (m.isMoving() || !liveOn || reduceMotion)) drawMap(frameT()); });   // same frame as the map
+    var tip = function(e){ if(BASE && !hoverPin) tipAt(e.point.x, e.point.y, mapCv.getBoundingClientRect()); };
+    m.on('mousemove', tip); m.on('click', tip);
+    m.on('mouseout', function(){ if(!hoverPin) mapTip.classList.remove('on'); });
+    m.on('dragstart', function(){ mapTip.classList.remove('on'); });
+    setTimeout(function(){ if(!ready){ try { m.remove(); } catch(_) {} } }, 12000);   // tiles unreachable: keep the outline map
+  }
+  if(window.ResizeObserver) new ResizeObserver(function(){ if(BASE) BASE.resize(); landCache = null; drawMap(frameT()); }).observe(mapWrap);
+  initBase();
 
   /* ---- hover a Latest-Alerts or Latest-blocked-inbound row: zoom the map to its location ---- */
   function positionPinTip(mx, my){
@@ -1154,11 +1373,16 @@ body.paused .mark-core,body.paused .tk.new,body.paused .live-dot{animation-play-
     if(isNaN(lat) || isNaN(lon)) return;
     hoverPin = {lat:lat, lon:lon};
     mapTip.innerHTML = label; mapTip.classList.add('on');
+    if(BASE){
+      if(!pinPrevView) pinPrevView = {center: BASE.getCenter(), zoom: BASE.getZoom()};
+      BASE.easeTo({center: [lon, lat], zoom: Math.max(BASE.getZoom(), 5), duration: reduceMotion ? 0 : 700});
+    }
     if(!liveOn || reduceMotion) drawMap(frameT());       // snap at once when nothing else is driving redraws
   }
   function pinOff(){
     if(!hoverPin) return;
     hoverPin = null; mapTip.classList.remove('on');
+    if(BASE && pinPrevView){ BASE.easeTo({center: pinPrevView.center, zoom: pinPrevView.zoom, duration: reduceMotion ? 0 : 700}); pinPrevView = null; }
     if(!liveOn || reduceMotion) drawMap(frameT());
   }
   function rowPin(el){
@@ -2236,6 +2460,12 @@ body.paused .mark-core,body.paused .tk.new,body.paused .live-dot{animation-play-
   });
   $('#alertBody').addEventListener('keydown', function(e){
     if((e.key==='Enter'||e.key===' ') && e.target.matches('tr[data-id]')){ e.preventDefault(); e.target.click(); }
+  });
+  $('#top5Body').addEventListener('click', function(e){
+    var row = e.target.closest('[data-rule]'); if(row) openDig({name:'alerts', rule:row.dataset.rule, source:''}, true);
+  });
+  $('#top5Body').addEventListener('keydown', function(e){
+    if((e.key==='Enter'||e.key===' ') && e.target.matches('[data-rule]')){ e.preventDefault(); e.target.click(); }
   });
   $('#allAlertsBtn').addEventListener('click', function(){ openDig({name:'alerts'}, true); });
   $('#envBadge').addEventListener('click', function(){ openDig({name:'cluster'}, true); });

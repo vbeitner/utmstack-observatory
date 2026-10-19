@@ -1,5 +1,179 @@
 # Release notes
 
+## 1.10.2 — 2026-10-18
+
+**For users**
+- One SSH attack no longer shows up two or three times in "Latest blocked / failed inbound" (sshd logs each attempt
+  as several lines in the same second).
+
+## 1.10.1 — 2026-10-18
+
+**For users**
+- The map credit (OpenFreeMap / OpenStreetMap) now starts folded into the (i) button instead of covering the top of
+  the map. Source names on blocked rows are capitalized.
+
+## 1.10.0 — 2026-10-18
+
+**For users**
+- Attackers seen by **Syslog** (e.g. "Invalid user … from 2.57.122.238"), **Linux** and **Windows** now appear on the
+  map, located from the attacker's IP address. **M365** now includes every user's sign-in, including the ones
+  UTMStack itself didn't place. Denied, dropped and failed events count as blocked attacks.
+- Every attacker IP in "Latest blocked / failed inbound" gets a **VPN**, **Tor** or **Hosting** badge when it comes
+  from a known VPN range, a Tor exit node or a datacenter/hosting range (where most VPNs and attack servers live).
+  City tooltips show how many connections came from such addresses.
+- With **All** selected, each blocked row shows which source reported it (Firewall, Syslog, Linux, …).
+- The street map and the traffic arcs now move together when you pan or zoom, and the map renders at a lighter
+  resolution so the animation stays smooth.
+- On first start after the update, the dashboard downloads its location database (~60 MB); Syslog/Linux/Windows
+  attackers show up on the map once that finishes (a few minutes).
+
+**Technical**
+- New `app/geoip.py`: DB-IP City Lite mmdb (CC BY 4.0, monthly) + X4BNet VPN / datacenter range lists + Tor bulk exit
+  list, stored in `DATA_DIR/geoip` and refreshed every 6 h when stale (lists weekly, DB monthly). IPs the local
+  database can't place go to proxycheck.io in a background queue (default cap 100/day, 7-day SQLite cache); set
+  `install.sh --proxycheck-key KEY` for a higher limit or `--geoip-online-daily 0` to switch it off. Private and
+  CGNAT/Tailscale addresses are never looked up. New dependency: `maxminddb==2.6.2`.
+- `build_geo()` split into `build_net_geo()` (types UTMStack geolocates) + `add_attackers()` per log type; one
+  failing source can't blank the map. `/api/geo` reports `geoip` status (DB date, list sizes, online lookups today).
+- Arc layer redraws on MapLibre's `render` event while the map moves (no one-frame lag); idle animation capped at
+  ~30 fps; map and arc layer use `pixelRatio` ≤ 1.25. Map credit starts folded.
+
+## 1.9.0 — 2026-10-18
+
+**For users**
+- The Live Firewall Map now sits on a detailed dark street map (OpenStreetMap data). Zoom in to see countries,
+  cities, roads and street names under the animated traffic arcs. Zoom with the mouse wheel, a double-click, or
+  the + / − / ⟲ buttons; drag to move. On phones, pinch to zoom and use two fingers to move the map — one finger
+  keeps scrolling the page.
+- Keep in mind that IP locations are city-level at best (often only the country), so a dot shows the area a
+  connection came from, never an exact street address.
+- If the street map can't load (no internet on the viewing computer, or no WebGL), the dashboard keeps the
+  previous outline map with its own zoom, as before.
+- Each viewer's browser now loads map tiles from tiles.openfreemap.org (free OpenStreetMap service, no account).
+  That service sees the viewer's IP and which map area is open, but not the dashboard's data or address.
+
+**Technical**
+- MapLibre GL JS 4.7.1 is vendored (`app/maplibre-gl.js`/`.css`, BSD-3, `app/MAPLIBRE-LICENSE.txt`) and served
+  by the dashboard; only tiles, fonts and sprites come from `TILE_HOST`. CSP adds that one host to `img-src`/
+  `connect-src`, plus `worker-src blob:` (MapLibre's worker) and `style-src 'self'`.
+- The animation canvas stays on top; when the basemap is up, arcs project through `map.project()` and the
+  canvas passes pointer events through to MapLibre. Hover-to-zoom on ticker rows uses `easeTo` and restores the
+  previous view. Falls back to the built-in outline map if the style hasn't loaded within 12 s.
+
+## 1.8.0 — 2026-10-18
+
+**For users**
+- The Live Firewall Map zooms and pans: use the **+ / − / ⟲** buttons (bottom right), the mouse wheel or a
+  double-click to zoom, and drag to move around once zoomed in. On phones and tablets, pinch to zoom and drag
+  with one finger; until you zoom in, a one-finger swipe still scrolls the page.
+- On touch screens, tap a city or firewall dot to see its details (desktop still shows them on hover).
+- On phones the map is taller, and the filter buttons scroll sideways instead of being cut off. The animations
+  run on phones too (unless the device has "Reduce motion" turned on).
+
+**Technical**
+- User zoom/pan drives the same eased camera as the existing hover-to-zoom; land is drawn as vectors when zoomed
+  (stays sharp) and from the cached raster at 1×. Hit targets are now stored in screen pixels so tooltips line
+  up at any zoom. Canvas `touch-action` is `pan-y` at 1× and `none` once zoomed. Zoom range 1–8×.
+
+## 1.7.1 — 2026-10-18
+
+**For users**
+- Fixed: on narrower screens the map's filter buttons wrapped onto a second row that was hidden behind the map.
+
+**Technical**
+- `.map-filters` overrides `.panel-head`'s fixed 50 px height so wrapped rows stay visible.
+
+## 1.7.0 — 2026-10-18
+
+**For users**
+- New **All / Allowed / Denied** switch on the Live Firewall Map. Combine it with the source and
+  Inbound / Outbound switches — for example, Firewall + Inbound + Denied shows only blocked attempts coming in.
+  Top countries follow the same selection.
+
+**Technical**
+- Client-side only: `dirArcs()` now applies direction and outcome to the already-fetched arcs (allowed =
+  `count - denied`), no new API call. Headline stats (connections/min, denied %) stay totals.
+
+## 1.6.2 — 2026-10-18
+
+**For users**
+- Fixed: the live map was dimmed with a "View this source's events" button in the middle even when showing real
+  traffic. That note now appears only for sources without location data (Windows, Linux, Syslog), as a slim bar
+  across the top of the map instead of covering it.
+
+**Technical**
+- `.map-fallback` set `display:flex`, which overrode the `hidden` attribute; added `.map-fallback[hidden]
+  {display:none}` (same pattern as `.top5-body[hidden]`) and turned the overlay into a top-anchored bar.
+
+## 1.6.1 — 2026-10-18
+
+**For users**
+- Fixed: choosing **Google** on the map showed an error. It now shows an empty map until Google logs start
+  arriving in UTMStack.
+
+**Technical**
+- `build_geo()` returns an empty payload when OpenSearch answers without `aggregations` (no index exists yet
+  for the type).
+
+## 1.6.0 — 2026-10-18
+
+**For users**
+- The map's source filter now starts on **All** and adds **M365** and **Google** next to Firewall. "All" shows
+  traffic from every source that carries location data, both directions; pick one source to see just that one,
+  and use All / Inbound / Outbound to choose the direction. M365 shows sign-in locations (inbound), with failed
+  sign-ins in the "Latest blocked / failed inbound" list.
+- Fixed: switching sources sometimes needed two clicks — a slow answer for the previous choice could overwrite
+  the new one. The map now clears immediately on a switch and ignores late answers.
+- Google shows an empty map for now: no Google Workspace / GCP logs are reaching UTMStack yet.
+
+**Technical**
+- `/api/geo` takes `type=all|firewall-sophos-xg|o365|google` (anything else means `all`); `build_geo()` scopes
+  the index pattern and a `dataType.keyword` filter per type, cache keyed by (window, type). Idle firewall pins
+  only appear on the All / Firewall views. Ticker counts `failed` as blocked for non-firewall sources.
+- Live coverage check (24 h): firewall has origin+target geo, o365 origin only, linux/syslog/wineventlog none.
+- OpenSearch was yellow from one unplaceable replica of the internal `top_queries-*` index (single-node
+  cluster). Set its replicas to 0 and added index template `observatory-single-node-top-queries` so new daily
+  indices don't ask for one — cluster is green.
+
+## 1.5.0 — 2026-10-18
+
+**For users**
+- The Live Firewall Map now has a **data source type** filter (Firewall / Windows / Linux / Syslog) and an
+  **inbound/outbound** filter. Only firewall and some cloud logs actually carry origin/destination locations —
+  selecting Windows, Linux, or Syslog shows a note explaining that instead of an empty map, with a button
+  straight to that source's own event/rule breakdown.
+- The map's stats panel (connections/min, denied %, top countries, latest blocked inbound) is now its own
+  movable, resizable widget — drag it anywhere, or remove it, independently of the map itself.
+
+**Technical**
+- No backend query changes: the type filter is purely a frontend gate (`GEO_TYPES` allowlist) since
+  `/api/geo` only ever covered the firewall Sophos XG index; live-checked OpenSearch confirmed `linux`/
+  `syslog`/`wineventlog` have zero `origin.geolocation`-tagged docs (vs. 537k for firewall, 74k for o365).
+  The fallback reuses the existing `alerts-rule`-style dig entry point (`openDig({name:'sources', tab:'source',
+  type})`), not a new view.
+- Inbound/outbound is a pure client-side filter over the already-fetched `arcs` array (each carries `dir`) —
+  no extra API round trip. Top-countries recomputes from filtered arcs when a direction is selected; falls
+  back to the server-aggregated `countries` list (more precise) when showing all traffic.
+- New `mapside` widget type, registered in both `app/layout.js`'s `WIDGETS` and `app/layout_store.py`'s
+  `WIDGET_TYPES` (plus the hardcoded catalogue-sync assertion in `tests/layout.test.js`) — the map panel's
+  sidebar markup moved from `.map-side` nested inside `#mapPanel` to its own top-level `data-widget="mapside"`
+  section, which is all the existing drag/resize/add/remove system needed to pick it up.
+
+## 1.4.0 — 2026-10-18
+
+**For users**
+- The **Alert Rules** list on the main dashboard is now clickable: click any rule bar to see every
+  alert that fired it in the last 24 hours (same filtered alert list already reachable from a
+  source's own rule breakdown), then click an alert for the full detail with source events,
+  WHOIS, and reputation lookups.
+
+**Technical**
+- Wired `renderRules()`'s bar rows to the existing `alerts-rule` dig view (`openDig({name:'alerts',
+  rule, source:''})`) instead of adding new UI — the backend `/api/alerts?rule=` filter and the
+  `VIEWS.alerts`/`VIEWS.alert` views already existed, used elsewhere (per-source rule rows, "Same
+  rule" button on alert detail). Added `.bar-row.clk` hover/focus styling and a `#top5Body`
+  click+keydown entry point matching the existing `#alertBody`/`#kpiBand` pattern.
+
 ## 1.3.1 — 2026-10-17
 
 **For users**

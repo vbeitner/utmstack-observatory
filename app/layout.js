@@ -7,6 +7,7 @@
   var WIDGETS = {   // keep minW/minH in step with WIDGET_TYPES in app/layout_store.py
     kpis:      {title: 'Key metrics',             desc: 'Data sources, events, alerts and ingest lag.',            minW: 6, minH: 4, w: 12, h: 4,  wallSafe: true},
     map:       {title: 'Live firewall map',       desc: 'Animated connections from every firewall to the world.',  minW: 5, minH: 8, w: 8,  h: 14, wallSafe: 'anon'},
+    mapside:   {title: 'Map stats',               desc: 'Connection rate, top countries and latest blocked inbound.', minW: 3, minH: 8, w: 4, h: 14, wallSafe: 'anon'},
     donut:     {title: 'Event source distribution', desc: 'Share of events by data type.',                         minW: 3, minH: 5, w: 4,  h: 6,  wallSafe: true},
     rules:     {title: 'Alert rules / AI traffic', desc: 'Top alert rules, or traffic to the AI servers.',         minW: 3, minH: 6, w: 4,  h: 8,  wallSafe: true},
     trend:     {title: 'Real-time event trend',   desc: 'Events and alerts per minute, last 30 minutes.',          minW: 4, minH: 5, w: 12, h: 7,  wallSafe: true},

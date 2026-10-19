@@ -15,6 +15,10 @@ A read-only operations dashboard for a UTMStack v11 SIEM. It reads UTMStack's ow
 - **Wall mode** for a NOC screen: full screen, client firewall names replaced by *Site A, Site B…*, rotating every 30 s
 - **PDF/HTML reports** on demand or on a daily schedule, downloadable from the dashboard (Reports, top right)
 
+**Documentation:** [User manual](docs/manual/USER-MANUAL.md) (with screenshots and clips) ·
+[Feature tour](docs/tour/index.html) · [Security assessment](docs/security/SECURITY-ASSESSMENT.md) ·
+[Release notes](RELEASE-NOTES.md). A demo with synthetic data runs with `DEMO=1` (see the manual).
+
 Python standard library only, with one exception (`fpdf2`, for the PDF reports). Runs as one container (a Docker Swarm service) next to UTMStack.
 
 ## Requirements
@@ -39,9 +43,9 @@ Common options:
 | Option | Meaning |
 |---|---|
 | `--port 8765` | port to publish (default 8765) |
-| `--tls` | HTTPS with a generated self-signed certificate (or `--tls-cert F --tls-key F` for your own) |
+| `--tls` / `--no-tls` | HTTPS with a generated self-signed certificate (default for new installs), or `--tls-cert F --tls-key F` for your own |
 | `--ai-hosts "gx10=10.0.2.34,web=10.0.2.17"` | enable the AI Traffic tab for these hosts (needs Sophos XG logs) |
-| `--user NAME` / `--password PW` | dashboard login (default user `admin`, random password) |
+| `--user NAME` / `--password PW` / `--password-file F` | dashboard login (default user `admin`, random password; new passwords 12+ characters) |
 | `--tz America/New_York` | time zone for day boundaries (default: the host's) |
 | `--stack NAME` | UTMStack stack name if it is not auto-detected |
 | `--import-history FILE` | seed `history.db` from an earlier install |
@@ -55,8 +59,10 @@ Other commands: `sudo ./install.sh status | logs | password [NEW] | uninstall [-
 
 ## Live Firewall Map
 
-Reads the Sophos XG logs UTMStack already stores (`v11-log-firewall-sophos-xg-*`) and uses UTMStack's own GeoIP
-enrichment (`origin.geolocation` / `target.geolocation`), so **no GeoIP database and no outside lookup** is needed.
+Reads the Sophos XG logs UTMStack already stores (`v11-log-firewall-sophos-xg-*`), plus attacker addresses from
+syslog, Linux, Windows and Microsoft 365 logs. Locations come from UTMStack's own GeoIP enrichment where present, then
+from a local DB-IP City Lite database with VPN, datacenter and Tor exit lists (downloaded into `/data/geoip`), and
+optionally from proxycheck.io for the rest (`--geoip-online-daily`, default 100 lookups a day, `0` = off).
 
 - **Firewall locations**: each firewall is identified by its WAN address (`dataSource`) and name (`log.deviceName`).
   Its pin comes from `--sites` if you set one, otherwise from UTMStack's GeoIP record for that WAN address, otherwise
@@ -73,11 +79,17 @@ enrichment (`origin.geolocation` / `target.geolocation`), so **no GeoIP database
 
 - **Login required.** HTTP Basic auth. The password is in `/etc/utmstack-observatory/admin.pass` (root only) and is passed to the
   container as a Docker secret. Change it with `sudo ./install.sh password`.
-- **Plain HTTP by default**, so the login crosses the network unencrypted. Use `--tls`, or only reach it over a VPN / trusted network.
+- **HTTPS by default on new installs** (self-signed). Installs from before 1.16 keep plain HTTP until re-run with `--tls`;
+  on plain HTTP the login crosses the network unencrypted, so only use it over a VPN / trusted network.
+- Changing the login, an API key or the support contact in the Settings panel needs the current password; every
+  settings and shared-layout change is logged (`audit:` lines in `install.sh logs`). A password set there is stored as a
+  PBKDF2 hash, and `install.sh password` removes it again.
 - **Swarm publishes the port on every interface.** Restrict it with your firewall. Example allowing only Tailscale and localhost:
   `iptables -I DOCKER-USER -p tcp --dport 8765 ! -s 100.64.0.0/10 -j DROP` (adapt, and persist it your usual way).
 - The container is read-only, drops all capabilities, runs as an unprivileged user, and has no Docker socket. It only *reads* OpenSearch.
-- It connects to OpenSearch without verifying its certificate (UTMStack uses an internal self-signed one on a private network).
+- It connects to OpenSearch without verifying its certificate (UTMStack uses an internal self-signed one on a private network);
+  set `OS_CA_FILE` to verify it.
+- Full assessment, findings and fixes: [docs/security/SECURITY-ASSESSMENT.md](docs/security/SECURITY-ASSESSMENT.md).
 - **WHOIS** (alert detail) sends the looked-up public IP to `rdap.org`, which forwards to the regional registry. Private addresses are never sent. Results are cached for 24 hours.
 - The history database stores counts only, not raw events.
 
@@ -154,7 +166,11 @@ The installer sets these; you only need them to run `app/server.py` by hand.
 | `VIRUSTOTAL_KEY` / `_FILE` | *(off)* | enables live VirusTotal vendor-detection lookups on an alert's IPs |
 | `REQUEST_TIMEOUT_S` | `15` | idle/slow clients are dropped after this many seconds |
 | `LOGIN_MAX_FAILURES`, `LOGIN_LOCK_S` | `5`, `900` | failed logins from one address before it's locked out, and for how long |
-| `MAX_CONNECTIONS` | *(unlimited)* | concurrent connections accepted; over the cap, new ones are refused immediately instead of queued |
+| `MAX_CONNECTIONS`, `MAX_CONNECTIONS_PER_IP` | `64`, `32` | concurrent connections accepted in total / per address; over the cap, new ones are refused immediately |
+| `HEADER_DEADLINE_S` | `10` | a client must send its whole request header within this time (slow-connection protection) |
+| `ALLOWED_HOSTS` | | extra `Host` names accepted when no password is set (otherwise only localhost) |
+| `OS_CA_FILE`, `OS_CHECK_HOSTNAME` | , `1` | verify OpenSearch's TLS certificate against this CA |
+| `DEMO` | | `1` = synthetic demo data, no OpenSearch needed |
 
 ## Troubleshooting
 

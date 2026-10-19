@@ -316,7 +316,7 @@ class Packaging(unittest.TestCase):
         s = load_server()
         for path in s.STATIC_FILES:
             self.assertTrue(os.path.getsize(os.path.join(ROOT, "app", path[1:])) > 10000, path)
-        with open(os.path.join(ROOT, "app", "index.html")) as f:
+        with open(os.path.join(ROOT, "app", "app.js")) as f:
             page = f.read()
         self.assertIn(s.TILE_HOST + "/styles/", page)
         self.assertEqual(s.TILE_HOST, "https://tiles.openfreemap.org")

@@ -1,5 +1,18 @@
 # Release notes
 
+## 1.12.0 — 2026-10-18
+
+**For users**
+- The **Live map** (and **Activity**) screens now fill the whole window height instead of stopping at a fixed height,
+  so on a large or tall monitor the map is a big, squarer view rather than a wide strip.
+- The street map always covers its whole panel — no empty bands above and below the world when the panel is tall
+  or square. The ⟲ button returns to that full view, centred on the Atlantic.
+
+**Technical**
+- `fitRows()` sizes `grid-auto-rows` for screens flagged `wall` to the space below the board top (not in edit mode,
+  wall mode — which has its own CSS — or the single-column phone layout). `coverView()` sets the MapLibre start
+  zoom and `minZoom` to `log2(max(w, h) / 512)`, updated on panel resize.
+
 ## 1.11.0 — 2026-10-18
 
 **For users**

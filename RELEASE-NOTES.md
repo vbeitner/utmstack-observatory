@@ -1,5 +1,26 @@
 # Release notes
 
+## 1.18.0 — 2026-10-19
+
+**For users**
+- **One person's wrong passwords no longer lock everyone out.** Until now the dashboard saw every user as the same
+  address, so five wrong passwords from anyone locked out all users for 15 minutes. It now sees each user's real
+  address. **Re-run `sudo ./install.sh` on the server** to get this; nothing else changes for users.
+- When a password was set in the Settings panel, the installer no longer warns "login check returned HTTP 401" at the
+  end. It says the Settings-panel login is in use instead.
+
+**Technical**
+- `install.sh` publishes the port with `mode=host` instead of through Swarm's ingress routing mesh, and pins the
+  service to the installing manager node (`node.id`, was `node.role==manager`). After removing the old service it
+  waits for the old container to exit, so the host port is free before the new task starts. Health checks are
+  unchanged; local `curl 127.0.0.1:$PORT` checks now arrive from the Docker bridge gateway.
+- OBS-11: per-address lockout and `MAX_CONNECTIONS_PER_IP` now apply per real client on Swarm deployments.
+- New `SHARED_ADDRESS_HINT_AFTER` (default 100): the server logs one `hint:` line when its first connections all come
+  from one address on the container's own network, the sign of a deployment still behind the ingress mesh.
+- `settings_store.py --configured KEY…` prints which Settings-panel overrides exist (names only); the installer uses
+  it to skip its login check, which would otherwise count as a failed login.
+- New tests: `tests/test_shared_address.py`.
+
 ## 1.16.2 — 2026-10-19
 
 **For users**

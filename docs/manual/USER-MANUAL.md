@@ -63,6 +63,8 @@ and prints it once at the end of the install.
 
 - After **5 wrong passwords** from the same address, that address is locked out for **15 minutes**, even if the next
   attempt is correct. Both numbers can be changed (see [Configuration reference](#15-configuration-reference)).
+  Since 1.18 the dashboard sees each user's real address, so one person's typos no longer lock everyone else out.
+  Installs from before 1.18 shared one address between all users until the installer is run again.
 - To change the password, use the [Settings panel](#12-settings-panel) or `sudo ./install.sh password` on the server.
 - To sign out, close the browser. Basic authentication has no sign-out button.
 
@@ -427,6 +429,7 @@ Only needed when running `app/server.py` yourself; the installer sets them for y
 | `PROXYCHECK_KEY`, `GEOIP_ONLINE_DAILY` | , `100` | Online location fallback |
 | `LOGIN_MAX_FAILURES`, `LOGIN_LOCK_S` | `5`, `900` | Lockout after N failures, for S seconds |
 | `MAX_CONNECTIONS`, `MAX_CONNECTIONS_PER_IP` | `64`, `32` | Concurrent connections in total and per address; extra ones are refused at once |
+| `SHARED_ADDRESS_HINT_AFTER` | `100` | Log a one-time hint when this many first connections all came from one Swarm network address; `0` = off |
 | `HEADER_DEADLINE_S` | `10` | A client must send its whole request header within this time |
 | `ALLOWED_HOSTS` | | Extra host names accepted when no login is configured (otherwise only localhost) |
 | `OS_CA_FILE`, `OS_CHECK_HOSTNAME` | , `1` | Verify OpenSearch's certificate against this CA |
@@ -457,7 +460,9 @@ Only needed when running `app/server.py` yourself; the installer sets them for y
   against cross-site request forgery on every change, and no third-party scripts (the map library is bundled).
 - **Encryption**: new installs use HTTPS with a self-signed certificate (browsers warn once; `--tls-cert`/`--tls-key`
   for your own). Installs from before 1.16 keep plain HTTP until re-run with `--tls`.
-  Docker Swarm publishes the port on every interface, so restrict it with the host firewall, for example:
+  The installer publishes the port in Swarm's host mode on the manager node, so the dashboard sees each user's real
+  address (the login lockout and connection limits are per user, not shared). The port still listens on every
+  interface, so restrict it with the host firewall, for example:
   `iptables -I DOCKER-USER -p tcp --dport 8765 ! -s 100.64.0.0/10 -j DROP`.
 - **What leaves the server**: public IP addresses for WHOIS (rdap.org), reputation (AbuseIPDB, VirusTotal, only if
   keys are set) and the optional location fallback (proxycheck.io); periodic downloads of IP location and VPN/Tor
@@ -476,7 +481,9 @@ The security assessment is in [`../security/SECURITY-ASSESSMENT.md`](../security
 | Ingest lag ~1 s but feeds are late | The headline is the newest event; click the card for the per-source delay. |
 | AI Traffic empty or low | It only sees traffic that crosses the firewall, not traffic inside the LAN. |
 | Street map does not appear | The browser cannot reach `tiles.openfreemap.org`; the outline map is used instead. |
-| Locked out | Wait 15 minutes, or restart the service, which clears the lockout. |
+| Locked out | Wait 15 minutes, or restart the service, which clears the lockout. If *everyone* is locked out at once, the install predates 1.18 and all users share one address: re-run `sudo ./install.sh`. |
+| Log line `hint: the first 100 connections all came from 10.0.0.2 …` | The port still goes through Swarm's ingress mesh (or a proxy), so all users share one address. Re-run `sudo ./install.sh` (1.18 or later). |
+| Installer: "Login check skipped: the Settings panel overrides the installer's login" | Normal. Sign in with the login set in the Settings panel, or reset it with `sudo ./install.sh password`. |
 | Anything else | `sudo ./install.sh logs` and `sudo ./install.sh status`; **Copy diagnostics** in the health panel. |
 
 ## 18. Third-party data and licences

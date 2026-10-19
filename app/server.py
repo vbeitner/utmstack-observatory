@@ -12,7 +12,7 @@ import urllib.error, urllib.request
 from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-VERSION = "1.16.2"
+VERSION = "1.18.0"
 HERE = os.path.dirname(os.path.abspath(__file__))
 if HERE not in sys.path:                          # the container runs "python3 -I", which leaves this folder off sys.path
     sys.path.insert(0, HERE)
@@ -2272,6 +2272,61 @@ class Handler(BaseHTTPRequestHandler):
             self.send(500, "application/json", json.dumps(client_error(u.path, e)).encode())
 
 
+# ---------------------------------------------------------------- shared-address hint
+# Behind Docker Swarm's ingress routing mesh every client reaches the container from the same overlay address
+# (e.g. 10.0.0.2), so the per-address lockout and MAX_CONNECTIONS_PER_IP apply to all users together. install.sh
+# publishes in host mode to avoid that; this logs a one-time hint when a deployment still looks like the mesh.
+SHARED_ADDRESS_HINT_AFTER = int(env("SHARED_ADDRESS_HINT_AFTER", "100") or "0")
+
+
+def connected_subnets(route_file="/proc/net/route"):
+    """IPv4 subnets this container is directly attached to (routes without a gateway); [] where unavailable."""
+    import struct
+    nets = []
+    try:
+        with open(route_file) as f:
+            for line in list(f)[1:]:
+                p = line.split()
+                if len(p) >= 8 and p[2] == "00000000" and p[1] != "00000000":
+                    dest = socket.inet_ntoa(struct.pack("<I", int(p[1], 16)))
+                    mask = socket.inet_ntoa(struct.pack("<I", int(p[7], 16)))
+                    nets.append(ipaddress.ip_network("%s/%s" % (dest, mask), strict=False))
+    except (OSError, ValueError):
+        pass
+    return nets
+
+
+class SharedAddressWatch:
+    """Watches the first `after` non-loopback connections. If they all came from one address on one of the
+    container's own subnets, seen() returns the hint (once); a second address, or an outside one, ends the watch."""
+
+    def __init__(self, after, subnets):
+        self.after, self.subnets, self.ip, self.count, self.done = after, subnets, None, 0, not after or not subnets
+
+    def seen(self, ip):
+        if self.done or not ip or ip.startswith("127.") or ip == "::1":
+            return None
+        if self.ip is None:
+            self.ip = ip
+        elif ip != self.ip:
+            self.done = True
+            return None
+        self.count += 1
+        if self.count < self.after:
+            return None
+        self.done = True
+        try:
+            addr = ipaddress.ip_address(ip)
+        except ValueError:
+            return None
+        if not any(addr.version == n.version and addr in n for n in self.subnets):
+            return None
+        return ("hint: the first %d connections all came from %s, an address on this container's own network. "
+                "Behind Docker Swarm's ingress routing mesh every user looks like that, so the login lockout and "
+                "MAX_CONNECTIONS_PER_IP are shared by all of them. Publish the port with mode=host "
+                "(re-run install.sh) to see real client addresses." % (self.count, ip))
+
+
 class Server(ThreadingHTTPServer):
     """Caps concurrent connections instead of spawning an unbounded thread per accept. tls_context, when set,
     is applied per-connection by Handler.setup() rather than to the listening socket (see setup() for why)."""
@@ -2282,14 +2337,18 @@ class Server(ThreadingHTTPServer):
         super().__init__(*a, **kw)
         self._conn_slots = threading.Semaphore(MAX_CONNECTIONS) if MAX_CONNECTIONS else None
         self._per_ip, self._per_ip_lock, self._owner = {}, threading.Lock(), {}
+        self._address_watch = SharedAddressWatch(SHARED_ADDRESS_HINT_AFTER, connected_subnets())
 
     def process_request(self, request, client_address):
         ip = client_address[0] if isinstance(client_address, tuple) else ""
         with self._per_ip_lock:
+            hint = self._address_watch.seen(ip)
             busy = MAX_CONNECTIONS_PER_IP and self._per_ip.get(ip, 0) >= MAX_CONNECTIONS_PER_IP
             if not busy:
                 self._per_ip[ip] = self._per_ip.get(ip, 0) + 1
                 self._owner[id(request)] = ip
+        if hint:
+            print(hint, flush=True)
         if busy or (self._conn_slots is not None and not self._conn_slots.acquire(blocking=False)):
             if not busy:
                 self._release_ip(request)

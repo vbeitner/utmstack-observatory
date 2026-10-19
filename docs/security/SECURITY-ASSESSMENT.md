@@ -103,7 +103,7 @@ a trusted network next to the SIEM, behind a login.
 | OBS-08 | Dashboard uses UTMStack's OpenSearch administrator account | Low | **Open**: recommendation, accepted |
 | OBS-09 | OpenSearch TLS certificate not verified | Low | **Mitigated** (`OS_CA_FILE` option; default unchanged for UTMStack's internal certificate) |
 | OBS-10 | Dashboard password stored in clear text in `settings.json` | Low | **Fixed** (PBKDF2-SHA256, 600,000 iterations); API keys stay recoverable by design |
-| OBS-11 | Lockout is per IP only; 8-character minimum password | Low | **Partly fixed** (12-character minimum); proxy-aware limits on roadmap |
+| OBS-11 | Lockout is per IP only; 8-character minimum password | Low | **Partly fixed** (12-character minimum; real client addresses on Swarm since 1.18.0); proxy-aware limits on roadmap |
 | OBS-12 | IPv6 zone IDs can inject query parameters into lookup URLs | Low | **Fixed** |
 | OBS-13 | Some third-party numbers reach `innerHTML` unescaped | Low | **Fixed** |
 | OBS-14 | Python's default error pages and HEAD/OPTIONS skip security headers | Low | **Fixed** |
@@ -278,6 +278,16 @@ global limit against distributed guessing. The minimum password length was 8.
 
 - New passwords need at least 12 characters (`test_obs11_new_passwords_need_twelve_characters`).
 - Installer-generated passwords are 20 random characters.
+- **1.18.0:** the installer publishes the port in Swarm's host mode instead of through the ingress routing mesh.
+  Verification of 1.16.0 on the production host showed that the mesh made every client appear as the ingress gateway
+  (`10.0.0.2`), so five wrong passwords from anyone locked out every user for 15 minutes, and
+  `MAX_CONNECTIONS_PER_IP` was one shared budget. The service is now pinned to the installing manager node and sees
+  real client addresses. The server logs a one-time hint when its first connections all come from one address on its
+  own network, which flags installs still running through the mesh. The installer also no longer runs its login
+  check, which counted as a failed login, when a Settings-panel login overrides its own
+  (`tests/test_shared_address.py`).
+
+**Residual.** Users behind one NAT or reverse proxy still share an address.
 
 **Roadmap.** Trusted-proxy support and a global failure budget.
 

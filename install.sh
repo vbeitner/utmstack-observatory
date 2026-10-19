@@ -181,6 +181,10 @@ if [ "${#CLEAR[@]}" -gt 0 ]; then
   docker run --rm --entrypoint python3 -v "$VOLUME:/data" "$IMAGE:$VERSION" -I /app/settings_store.py /data --clear "${CLEAR[@]}" \
     | sed 's/^/    settings panel override /' || warn "could not clear the settings-panel override for: ${CLEAR[*]}"
 fi
+# A login saved in the Settings panel (and not cleared above) is the one that works, so the installer's own login
+# check below would only fail (and count towards the lockout). Note which parts are overridden to skip it.
+OVERRIDDEN="$(docker run --rm --entrypoint python3 -v "$VOLUME:/data" "$IMAGE:$VERSION" -I /app/settings_store.py /data \
+  --configured dash_user dash_pass 2>/dev/null || true)"
 
 # ---------------------------------------------------------------- secrets + service
 TS="$(date +%s)"
@@ -220,10 +224,18 @@ if docker service inspect "$SERVICE" >/dev/null 2>&1; then
   info "Replacing existing service"; docker service rm "$SERVICE" >/dev/null
   for _ in $(seq 1 30); do docker service inspect "$SERVICE" >/dev/null 2>&1 || break; sleep 1; done
 fi
-info "Starting service on network $NET, port $PORT"
+# mode=host binds the port on the node itself, so it is only free once the old container has really exited
+# (service rm returns before that); otherwise the new task waits in "host-mode port already in use".
+for _ in $(seq 1 30); do
+  [ -z "$(docker ps -q --filter "label=com.docker.swarm.service.name=$SERVICE")" ] && break; sleep 1
+done
+# Publish in host mode, not through Swarm's ingress routing mesh: the mesh rewrites every client address to the
+# ingress gateway (e.g. 10.0.0.2), so the per-address login lockout and connection cap would be shared by all users.
+# One replica pinned to this manager node, so the port opens here (where the checks below and the user expect it).
+info "Starting service on network $NET, port $PORT (host mode)"
 docker service create --detach --name "$SERVICE" --label "$LABEL=1" --network "$NET" \
-  --constraint node.role==manager --replicas 1 --no-resolve-image \
-  --publish "published=$PORT,target=8765,protocol=tcp" \
+  --constraint "node.id==$(docker info --format '{{.Swarm.NodeID}}')" --replicas 1 --no-resolve-image \
+  --publish "published=$PORT,target=8765,protocol=tcp,mode=host" \
   --read-only --cap-drop ALL --limit-memory 512m --limit-cpu 1 --restart-condition any \
   "${MOUNTS[@]}" "${SECRETS[@]}" "${ENVS[@]}" "$IMAGE:$VERSION" >/dev/null
 
@@ -241,11 +253,15 @@ for _ in $(seq 1 45); do
   sleep 2
 done
 if [ "$ok" != 1 ]; then docker service logs --tail 30 "$SERVICE" 2>&1 || true; die "the dashboard did not come up; see the log above"; fi
-sleep 6
-# credentials go to curl on stdin (-K -), not on its command line where other users could see them in ps
-auth="$(printf 'user = "%s"\n' "$(printf '%s' "$DASH_USER:$DASH_PASS" | sed 's/[\\"]/\\&/g')" \
-  | curl -sk -m 15 -K - -o /dev/null -w '%{http_code}' "$sch://127.0.0.1:$PORT/api/data" || true)"
-[ "$auth" = 200 ] || warn "login check returned HTTP $auth"
+if [ -n "$OVERRIDDEN" ]; then
+  info "Login check skipped: the Settings panel overrides the installer's login ($OVERRIDDEN); sign in with that one"
+else
+  sleep 6
+  # credentials go to curl on stdin (-K -), not on its command line where other users could see them in ps
+  auth="$(printf 'user = "%s"\n' "$(printf '%s' "$DASH_USER:$DASH_PASS" | sed 's/[\\"]/\\&/g')" \
+    | curl -sk -m 15 -K - -o /dev/null -w '%{http_code}' "$sch://127.0.0.1:$PORT/api/data" || true)"
+  [ "$auth" = 200 ] || warn "login check returned HTTP $auth"
+fi
 
 { printf 'PORT=%q\nDASH_USER=%q\nAI_HOSTS=%q\nTLS=%q\nTZ_NAME=%q\nSTACK=%q\nSITES=%q\nHOME_LOC=%q\nSUPPORT=%q\nABUSEIPDB_KEY=%q\nVIRUSTOTAL_KEY=%q\nPROXYCHECK_KEY=%q\nGEOIP_ONLINE_DAILY=%q\n' \
     "$PORT" "$DASH_USER" "$AI_HOSTS" "$TLS" "$TZ_NAME" "$STACK" "$SITES" "$HOME_LOC" "$SUPPORT" "$ABUSEIPDB_KEY" "$VIRUSTOTAL_KEY" "$PROXYCHECK_KEY" "$GEOIP_ONLINE_DAILY"
@@ -258,5 +274,6 @@ echo "    user: $DASH_USER"
 if [ "$GENERATED" = 1 ]; then echo "    password: $DASH_PASS   (shown once; also in $PASS_FILE)"
 elif [ -n "$NEW_PASS" ]; then echo "    password: (the one you set)"; else echo "    password: (unchanged; stored in $PASS_FILE)"; fi
 echo "    password file: $PASS_FILE    config: $CONF"
+[ -z "$OVERRIDDEN" ] || echo "    note: a login set in the Settings panel ($OVERRIDDEN) overrides the above; 'install.sh password' resets it"
 [ "$TLS" = 1 ] || warn "plain HTTP: the login travels unencrypted. Use a trusted network/VPN, or re-run with --tls."
 echo "    The published port listens on all interfaces; restrict it with your firewall if needed."

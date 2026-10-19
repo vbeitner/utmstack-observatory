@@ -500,16 +500,41 @@ with.
 
 1. ~~A read-only OpenSearch role and user created by the installer (OBS-08).~~ Done in 1.19.0.
 2. ~~MapLibre GL JS 6.4.1 or later (OBS-04).~~ Done in 1.21.0 (6.12.0).
-3. A read-only viewer login for wall screens, with anonymisation enforced on the server (OBS-05).
+3. ~~A read-only viewer login for wall screens~~ Viewer role added in 1.22.0 (email sign-in). Still open: anonymisation
+   enforced on the server for wall screens (OBS-05).
 4. ~~A global login-failure budget (OBS-11).~~ Done in 1.21.0. Trusted-proxy support only if a reverse proxy is used.
 5. A base image pinned by digest, hash-locked dependencies and a monthly rebuild (OBS-16).
 6. A reverse-proxy deployment guide with a trusted certificate, and upgrading existing installs to TLS (OBS-01).
+
+## Addendum — 1.22.0: invited users and email sign-in links
+
+Not retested by a separate assessment; design notes and the tests in `tests/test_users.py`.
+
+| Threat | Control |
+|---|---|
+| Stolen `users.json` | Only SHA-256 digests of session and link tokens are stored (file mode 0600). |
+| Link captured from logs, proxies, `Referer` or history | Token is in the URL fragment, never sent to a server; the page removes it from the address bar at once. |
+| Mail scanners spending the link | Token is spent only by a POST from the reader's *Continue* click. |
+| Link pointed at an attacker's host (Host-header poisoning) | Links use only the configured public address; without one, no link is sent. |
+| Finding out who has access | `/auth/request` answers identically for every address and sends in the background. |
+| Link spraying and mailbox flooding | 5 requests per client address and 3 per mailbox in 15 minutes; wrong tokens count towards the per-address lockout. |
+| Session riding (CSRF) | Cookie is `HttpOnly; SameSite=Strict`; every write still needs the JSON content type, `X-Observatory: 1` and a matching `Origin`. |
+| Removed or demoted users keeping access | The role is read from the user list on every request; removal also deletes the user's sessions. |
+| A walk-up on an unlocked, signed-in browser | Sensitive changes need the password again, or an email sign-in from the last 15 minutes. |
+| Email header injection | Addresses must match a strict single-address pattern (no spaces, commas, angle brackets or line breaks). |
+| SMTP/Graph credentials | Write-only in Settings like the API keys; TLS certificates are verified for SMTP and Graph. |
+
+Residual risks: anyone who can read an invited user's mailbox can sign in as that user (inherent to email links,
+mitigated by short-lived, single-use links); a Graph app with *Mail.Send* can send as any mailbox in the tenant unless
+an Exchange application access policy limits it (documented in the README).
 
 ## Appendix A — Deployment hardening checklist
 
 - [ ] HTTPS on (`--tls`, or a reverse proxy with a trusted certificate)
 - [ ] Install output ends with `OpenSearch account: observatory_reader` (not the administrator account)
 - [ ] Port 8765 restricted with the host firewall (`DOCKER-USER` chain) to the admin network or VPN
+- [ ] People sign in with their own email link; the administrator password is kept for emergencies only
+- [ ] For Microsoft 365 Graph email: the app is limited to the sender mailbox with an application access policy
 - [ ] Installer-generated password kept, or a new one of at least 12 characters
 - [ ] Settings-panel API keys entered only by administrators; `/data` backups treated as sensitive
 - [ ] Wall screens on a dedicated, locked-down kiosk account

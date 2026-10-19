@@ -59,9 +59,14 @@ The dashboard refreshes itself every few seconds. **Live** in the header means y
 
 ## 2. Signing in
 
-Open the address your administrator gave you, for example `http://siem-server:8765` (or `https://…` if TLS is on).
-Your browser asks for a user name and password. The default user is `admin`; the installer generates the password
-and prints it once at the end of the install.
+Open the address your administrator gave you, for example `https://siem-server:8765`. The sign-in page opens.
+
+- **With your email address** (since 1.22): enter the address your administrator added and click *Email me a
+  sign-in link*. Open the email and click **Sign in**, then **Continue**. The link works once and expires after 15
+  minutes; ask for a new one if it has. You stay signed in for 7 days in that browser.
+- **With the administrator password**: click *Sign in with the administrator password*. The default user is `admin`;
+  the installer generates the password and prints it once at the end of the install. This is the only way in until
+  email sign-in is set up (see [Settings panel](#12-settings-panel)), and always signs in as an admin.
 
 - After **5 wrong passwords** from the same address, that address is locked out for **15 minutes**, even if the next
   attempt is correct. Both numbers can be changed (see [Configuration reference](#15-configuration-reference)).
@@ -69,7 +74,9 @@ and prints it once at the end of the install.
   anyone else out. If many wrong passwords arrive from many addresses at once, every failed attempt is slowed down
   instead, so nobody is locked out by someone else's attack.
 - To change the password, use the [Settings panel](#12-settings-panel) or `sudo ./install.sh password` on the server.
-- To sign out, close the browser. Basic authentication has no sign-out button.
+- To sign out, open Settings and click **Sign out**.
+- Wrong or expired sign-in links count as failed sign-ins for the lockout above. Asking for links is limited to 3 per
+  address and 5 per computer in 15 minutes.
 
 ## 3. The header
 
@@ -342,15 +349,21 @@ The dashboard works on a phone. Panels stack, and the map gets a taller view wit
 
 ## 12. Settings panel
 
-The **gear** icon opens Settings. Changes apply immediately, with no restart. Changing the login, an API key or the
-support contact needs your **current password** in the *Confirm* field at the bottom. A value saved here overrides the
-matching installer option; clearing a field and saving falls back to the installer's value.
+The **gear** icon opens Settings. Viewers see only who they are signed in as and *Sign out*; everything else is for
+admins. Changes apply immediately, with no restart. Changing users, the login, email settings, an API key or the
+support contact needs your **current password** in the *Confirm* field at the bottom if you signed in with the
+password, or a sign-in from the last 15 minutes if you signed in by email link (otherwise sign out and in again).
+A value saved here overrides the matching installer option; clearing a field and saving falls back to the
+installer's value.
 
 ![Settings](../media/screens/15-settings.jpg)
 
 | Section | Settings |
 |---|---|
-| **Dashboard login** | User name and password (at least 12 characters). Changing the password signs you out so you sign in again with the new one. |
+| **Signed in** | Your address, role and how you signed in; **Sign out**. |
+| **Users** | Add people by email as *viewer* (every panel, layout, reports) or *admin* (also users, settings, API keys, *Apply fix*), change a role or remove someone (they are signed out at once). *Email an invitation* sends them the dashboard address. You cannot remove or demote yourself. |
+| **Email for sign-in links** | The dashboard's public address (where links point), and how to send: an SMTP server (host, port, encryption, username, password) or Microsoft 365 through the Graph API (tenant ID, client ID, client secret of an app registration with the *Mail.Send* application permission). The sender address, then **Send test email**. |
+| **Administrator password** | The break-glass admin login: user name and password (at least 12 characters). Changing the password signs out everyone who signed in with the old one. |
 | **API keys** | AbuseIPDB and VirusTotal keys for the Reputation section of alert detail. Keys are write-only: the panel shows whether a key is set, never the key itself. |
 | **Support contact** | Name, email, phone and website shown when the logo is clicked. |
 | **Live map** | Home location (where firewalls without a known location are drawn) and site pins (`FirewallName=lat,lon,City;203.0.113.7=lat,lon`). |
@@ -431,6 +444,8 @@ Options are remembered in `/etc/utmstack-observatory/config.env`; pass one again
 | `--no-health-fix` | button on | No *Apply fix* button in the SIEM-health panel (commands only) |
 | `--no-real-ip-rule` | rule on | Do not install the firewall rule that keeps Tailscale users' real addresses (only installed when Tailscale is present) |
 | `--os-account reader\|backend` | `reader` | OpenSearch account for the dashboard: the read-only `observatory_reader`, or UTMStack's administrator |
+| `--admin-email ADDR` | | Add this address as an admin; it signs in by email link once email is set up |
+| `--public-url URL` | | The address people open, e.g. `https://observatory.example.com:8765`; sign-in links point here |
 
 ### Environment variables
 
@@ -441,6 +456,8 @@ Only needed when running `app/server.py` yourself; the installer sets them for y
 | `OS_URL` | | OpenSearch URL, e.g. `https://node1:9200`. Empty = use `docker exec` on the host |
 | `OS_USER`, `OS_PASS` / `OS_PASS_FILE` | | OpenSearch credentials (the installer sets the read-only `observatory_reader`) |
 | `DASH_USER`, `DASH_PASS` / `DASH_PASS_FILE` | `admin` | Dashboard login. Without a password it only listens on 127.0.0.1 |
+| `ADMIN_EMAIL`, `PUBLIC_URL` | | Same as `--admin-email` and `--public-url` |
+| `SESSION_DAYS`, `LINK_MINUTES`, `REAUTH_MINUTES` | `7`, `15`, `15` | How long a sign-in lasts; how long a sign-in link works; how recent an email sign-in must be for sensitive changes |
 | `PORT`, `BIND` | `8765`, `0.0.0.0` | Listening port and address |
 | `TLS_CERT`, `TLS_KEY` | | Certificate and key files; enables HTTPS |
 | `DATA_DIR` | app folder | History database, settings, layout, reports and IP data |
@@ -470,6 +487,7 @@ Only needed when running `app/server.py` yourself; the installer sets them for y
 |---|---|
 | 30-day history, storage sizes | Docker volume `utmstack-observatory-data` → `/data/history.db` |
 | Live settings, shared layout | `/data/settings.json`, `/data/layout.json` |
+| Users and open sign-ins (digests of the tokens, never the tokens) | `/data/users.json` |
 | Reports (last 30) | `/data/reports/` |
 | IP location and VPN/Tor data | `/data/geoip/` |
 | Installer settings | `/etc/utmstack-observatory/config.env` |
@@ -486,10 +504,14 @@ Only needed when running `app/server.py` yourself; the installer sets them for y
 - **Apply fix** uses a second, narrow OpenSearch account (`observatory_fixer`) that can only change replica
   settings; it cannot read, change or delete data. The dashboard works out the fix from the cluster itself and runs
   only a fixed list of changes, and only after you enter your password. `--no-health-fix` leaves it out.
-- **Login on everything** except a minimal health check. Repeated wrong passwords lock out the source address, and a
-  wave of wrong passwords from many addresses slows every failed attempt down.
-  Changing the login, an API key or the support contact also asks for the current password, and every change is
-  logged.
+- **Login on everything** except a minimal health check and the sign-in page. Repeated wrong passwords or sign-in
+  links lock out the source address, and a wave of failures from many addresses slows every failed attempt down.
+  Changing users, the login, email, an API key or the support contact also asks for the current password (or a
+  recent email sign-in), and every change is logged with who made it.
+- **Email sign-in links** work once, expire after 15 minutes and are only used when you click *Continue*, so a mail
+  filter that opens links ahead of you cannot use them. The link's secret is after the `#`, which browsers never send
+  to a server or proxy. The dashboard answers the same way whether or not an address has access, so nobody can use the
+  sign-in page to find out who does.
 - **Container hardening**: read-only file system, all Linux capabilities dropped, unprivileged user, no Docker socket,
   password passed as a Docker secret.
 - **Browser protections**: a Content Security Policy that allows only the dashboard's own scripts, protection

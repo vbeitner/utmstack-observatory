@@ -27,6 +27,11 @@
   try { var savedR = parseInt(localStorage.getItem('obsRange'),10); if([1,6,24].indexOf(savedR)>=0) RANGE = savedR; } catch(e){}
   function rl(){ return RANGE+' h'; }
 
+  /* ---------- who is signed in: an invited user (email link) or the installer password ---------- */
+  var ME = {role: 'admin', method: 'none', name: ''};
+  function signedIn(r){ if(r.status === 401){ location.href = '/login'; throw new Error('signed out'); } return r; }
+  fetch('/api/me', {cache:'no-store'}).then(signedIn).then(function(r){ return r.json(); }).then(function(m){ ME = m; }).catch(function(){});
+
   /* ---------- state ---------- */
   var D = null;                 // latest API payload
   var points = [];              // [{t:Date,total,fail}]
@@ -341,7 +346,7 @@
     $('#statusText').textContent = 'Paused · display frozen · ' + (heldUpdates ? heldUpdates+' update'+(heldUpdates===1?'':'s')+' collected in the background' : 'still collecting in the background');
   }
   function poll(){
-    fetch('/api/data?range='+RANGE, {cache:'no-store'}).then(function(r){ if(!r.ok) throw new Error('HTTP '+r.status); return r.json(); })
+    fetch('/api/data?range='+RANGE, {cache:'no-store'}).then(signedIn).then(function(r){ if(!r.ok) throw new Error('HTTP '+r.status); return r.json(); })
       .then(function(d){
         if(liveOn) return apply(d);
         if(!d.range_h || d.range_h === RANGE){ pendingD = d; heldUpdates++; pausedStatus(); }
@@ -508,7 +513,7 @@
     Object.keys(ends).forEach(function(k){                // remote endpoints
       var e = ends[k], col = anonColor(e) || (e.denied*2 >= e.count ? C_DENY : C_OUT), r = (1.6 + 3.2*Math.log(1+e.count)/Math.log(1+maxC))/camZ;
       if(e.denied && !reduceMotion){
-        var pulse = (t*.9 + (e.p[0]%7)/7) % 1;
+        var pulse = ((t*.9 + (e.p[0]%7)/7) % 1 + 1) % 1;     // kept in 0..1 for western longitudes too
         ctx.beginPath(); ctx.arc(e.p[0], e.p[1], r + pulse*14/camZ, 0, Math.PI*2);
         ctx.strokeStyle = hexA(C_DENY, .55*(1-pulse)); ctx.lineWidth = 1.2/camZ; ctx.stroke();
       }
@@ -518,7 +523,7 @@
     G.sites.forEach(function(s){                          // firewalls on top
       var p = s._p, busy = s.total ? Math.min(1, Math.log(1+s.total)/Math.log(1+3000)) : 0, r = (3.5 + 3*busy)/camZ;
       if(!reduceMotion && s.total){
-        var pl = (t*.6 + (p[1]%5)/5) % 1;
+        var pl = ((t*.6 + (p[1]%5)/5) % 1 + 1) % 1;          // % keeps the sign: a site south of the equator gave a negative radius
         ctx.beginPath(); ctx.arc(p[0], p[1], r + pl*18/camZ, 0, Math.PI*2); ctx.strokeStyle = 'rgba(234,247,255,'+(.4*(1-pl))+')'; ctx.lineWidth = 1/camZ; ctx.stroke();
       }
       ctx.beginPath(); ctx.arc(p[0], p[1], r+3/camZ, 0, Math.PI*2); ctx.fillStyle = 'rgba(53,231,255,.18)'; ctx.fill();
@@ -1299,7 +1304,7 @@
       q = '?'+Object.keys(params).filter(function(k){ return params[k]!=='' && params[k]!=null; })
         .map(function(k){ return encodeURIComponent(k)+'='+encodeURIComponent(params[k]); }).join('&');
     }
-    return fetch(path+q, {cache:'no-store'}).then(function(r){ return r.json(); })
+    return fetch(path+q, {cache:'no-store'}).then(signedIn).then(function(r){ return r.json(); })
       .then(function(d){ if(d && d.error) throw new Error(d.error); return d; });
   }
   function setHead(title, meta){ $('#digTitle').textContent = title; $('#digMeta').textContent = meta||''; }
@@ -1694,7 +1699,8 @@
       }
       if(d.fix){
         html += '<h3 class="tl-title">'+(d.can_fix?'Or fix it by hand':'How to fix it')+'</h3><div class="note-card warn">'+
-          (d.can_fix?'':'<b>This installation\'s OpenSearch account is read-only, so the dashboard cannot change your cluster.</b> Re-run the installer to add the fix account, or:<br>')+
+          (d.can_fix?'':d.viewer?'<b>Only an admin can apply the fix from the dashboard.</b> Ask one, or:<br>':
+            '<b>This installation\'s OpenSearch account is read-only, so the dashboard cannot change your cluster.</b> Re-run the installer to add the fix account, or:<br>')+
           'Paste these commands one at a time into a terminal on the UTMStack server, as a user that can use sudo. '+
           'Each one reads the OpenSearch password from UTMStack\'s backend service by itself (you never type it) and prints OpenSearch\'s answer: '+
           '<code>{"acknowledged":true}</code> means it worked. They remove the replica copies a one-node cluster can never place and stop new daily '+
@@ -1833,16 +1839,116 @@
       (value!=null?' value="'+esc(value)+'"':'')+'>'+
       (hint?'<div class="hint">'+esc(hint)+'</div>':'')+'</div>';
   }
-  function renderSettings(s){
-    var html = '<h3 class="tl-title">Dashboard login</h3>'+
+  function sel(id, label, value, options, hint){
+    return '<div class="set-field"><label for="'+id+'">'+esc(label)+'</label><select id="'+id+'">'+
+      options.map(function(o){ return '<option value="'+esc(o[0])+'"'+(o[0]===(value||'')?' selected':'')+'>'+esc(o[1])+'</option>'; }).join('')+
+      '</select>'+(hint?'<div class="hint">'+esc(hint)+'</div>':'')+'</div>';
+  }
+  function secretPh(on){ return on ? 'Configured — leave blank to keep' : 'Not set'; }
+  function noteOn(el, text, kind){ el.textContent = text; el.style.color = kind==='bad' ? '#FF8A95' : kind==='good' ? '#68F5B1' : kind==='warn' ? '#FFC857' : ''; }
+  function postJSON(path, body){
+    return fetch(path, {method: 'POST', cache: 'no-store', headers: {'Content-Type': 'application/json', 'X-Observatory': '1'},
+      body: JSON.stringify(body || {})}).then(signedIn)
+      .then(function(r){ return r.json().catch(function(){ return {}; }).then(function(j){ return {status: r.status, j: j}; }); });
+  }
+  function accountSection(){
+    var how = ME.method==='link' ? 'email link' : ME.method==='password' ? 'administrator password' : 'no login (localhost)';
+    return '<h3 class="tl-title">Signed in</h3><div class="drawer-foot"><span>'+esc(ME.name)+
+      ' <span class="panel-meta">'+esc(ME.role)+' · '+how+'</span></span>'+
+      (ME.method!=='none'?'<button class="ghost-btn" id="signOut">Sign out</button>':'')+'</div>';
+  }
+  function bindAccount(){
+    var b = $('#signOut');
+    if(b) b.addEventListener('click', function(){
+      b.disabled = true;
+      postJSON('/auth/logout').then(function(){ location.href = '/login'; }, function(){ location.href = '/login'; });
+    });
+  }
+  function usersSection(u){
+    var when = function(t){ return t ? fmtDT(t*1000) : 'never'; };
+    return '<h3 class="tl-title">Users <span class="panel-meta">invited people sign in with a one-time link sent by email</span></h3>'+
+      (u.link_status ? '<div class="note-card warn"><b>Email sign-in is not working yet:</b> '+esc(u.link_status)+
+        '. Set it up under <i>Email for sign-in links</i> below; until then only the administrator password works.</div>' : '')+
+      (u.users.length ? '<table class="cmp users"><thead><tr><th>EMAIL</th><th>ROLE</th><th>LAST SIGN-IN</th><th></th></tr></thead><tbody>'+
+        u.users.map(function(x){
+          var me = x.email === u.me;
+          return '<tr><td>'+esc(x.email)+(me?' <small>you</small>':'')+'</td><td><select data-role="'+esc(x.email)+'"'+(me?' disabled':'')+
+            ' aria-label="Role of '+esc(x.email)+'">'+['admin','viewer'].map(function(r){ return '<option'+(r===x.role?' selected':'')+'>'+r+'</option>'; }).join('')+
+            '</select></td><td>'+when(x.last_login)+'</td><td>'+(me?'':'<button class="ghost-btn" data-rm="'+esc(x.email)+'">Remove</button>')+'</td></tr>';
+        }).join('')+'</tbody></table>' : '<div class="hint">No users yet: add the first one below.</div>')+
+      '<div class="user-add"><input id="uEmail" type="email" maxlength="254" placeholder="name@example.com" aria-label="Email address to add">'+
+      '<select id="uRole" aria-label="Role"><option value="viewer">viewer</option><option value="admin">admin</option></select>'+
+      '<label class="hint"><input type="checkbox" id="uInvite" checked> email an invitation</label>'+
+      '<button class="ghost-btn" id="uAdd">Add user</button></div><span class="hint" id="uNote"></span>'+
+      '<div class="hint">Viewers see every panel, change the layout and create reports. Admins also manage users, settings and <i>Apply fix</i>.</div>';
+  }
+  function bindUsers(){
+    var note = $('#uNote');
+    function act(body, done){
+      if($('#setCurPass')) body.current_password = $('#setCurPass').value;
+      noteOn(note, 'Saving…');
+      postJSON('/api/users', body).then(function(res){
+        if(res.status !== 200){ noteOn(note, res.j.error || ('Failed (HTTP '+res.status+')'), 'bad'); return; }
+        $('#usersBox').innerHTML = usersSection(res.j); bindUsers(); noteOn($('#uNote'), done, 'good');
+      }).catch(function(e){ noteOn(note, 'Failed: '+e.message, 'bad'); });
+    }
+    $('#uAdd').addEventListener('click', function(){
+      var email = $('#uEmail').value.trim();
+      if(!email){ noteOn(note, 'Enter an email address.', 'warn'); $('#uEmail').focus(); return; }
+      act({action: 'add', email: email, role: $('#uRole').value, invite: $('#uInvite').checked}, 'Added '+email+'.');
+    });
+    $$('#usersBox [data-rm]').forEach(function(b){ b.addEventListener('click', function(){
+      if(confirm('Remove '+b.dataset.rm+'? They are signed out at once.')) act({action: 'remove', email: b.dataset.rm}, 'Removed '+b.dataset.rm+'.');
+    }); });
+    $$('#usersBox [data-role]').forEach(function(x){ x.addEventListener('change', function(){
+      act({action: 'add', email: x.dataset.role, role: x.value}, x.dataset.role+' is now '+x.value+'.');
+    }); });
+  }
+  function mailSection(s){
+    return '<h3 class="tl-title">Email for sign-in links</h3>'+
+      (s.mail_status ? '<div class="hint" style="color:#FFC857">Not ready: '+esc(s.mail_status)+'.</div>' : '<div class="hint" style="color:#68F5B1">Ready to send sign-in links.</div>')+
+      field('setPublicUrl', 'Dashboard public address', s.public_url, 'The address people open; sign-in links point here. Example: '+location.origin,
+            {maxlength: 300, placeholder: location.origin}) +
+      sel('setMailMethod', 'Send email with', s.mail_method, [['', 'Off'], ['smtp', 'SMTP server'], ['graph', 'Microsoft 365 (Graph API)']]) +
+      field('setMailFrom', 'Sender address', s.mail_from, 'For Microsoft 365, the mailbox the app sends as (a shared mailbox works).', {maxlength: 254}) +
+      '<div id="smtpBox">'+
+        field('setSmtpHost', 'SMTP server', s.smtp_host, 'e.g. smtp.office365.com, smtp.gmail.com, email-smtp.us-east-1.amazonaws.com', {maxlength: 253}) +
+        field('setSmtpPort', 'Port', s.smtp_port, 'Blank: 587 for STARTTLS, 465 for TLS, 25 for none.', {maxlength: 5}) +
+        sel('setSmtpSec', 'Encryption', s.smtp_security, [['starttls', 'STARTTLS (port 587)'], ['tls', 'TLS (port 465)'], ['none', 'None (internal relay only)']]) +
+        field('setSmtpUser', 'SMTP username', s.smtp_user, 'Blank for a relay that needs no login.', {maxlength: 254}) +
+        field('setSmtpPass', 'SMTP password', null, null, {password: true, maxlength: 500, placeholder: secretPh(s.smtp_pass_configured)}) +
+      '</div><div id="graphBox">'+
+        field('setGraphTenant', 'Tenant ID', s.graph_tenant, 'Entra ID → App registrations → your app. Needs the Mail.Send application permission, admin-consented.', {maxlength: 100}) +
+        field('setGraphClient', 'Client (application) ID', s.graph_client_id, null, {maxlength: 100}) +
+        field('setGraphSecret', 'Client secret', null, null, {password: true, maxlength: 500, placeholder: secretPh(s.graph_secret_configured)}) +
+      '</div>'+
+      '<div class="drawer-foot"><input id="mailTestTo" type="email" maxlength="254" placeholder="'+esc(ME.email||'you@example.com')+'" aria-label="Send the test email to">'+
+      '<button class="ghost-btn" id="mailTest">Send test email</button><span class="hint" id="mailNote">Save first; the test uses the saved settings.</span></div>';
+  }
+  function bindMail(){
+    function method(){ var m = $('#setMailMethod').value; $('#smtpBox').hidden = m !== 'smtp'; $('#graphBox').hidden = m !== 'graph'; }
+    $('#setMailMethod').addEventListener('change', method); method();
+    $('#mailTest').addEventListener('click', function(){
+      var note = $('#mailNote'); noteOn(note, 'Sending…');
+      postJSON('/api/mail/test', {to: $('#mailTestTo').value.trim()}).then(function(res){
+        if(res.status === 200 && res.j.ok) noteOn(note, 'Sent to '+res.j.to+'. Check that inbox (and its junk folder).', 'good');
+        else noteOn(note, res.j.error || ('Failed (HTTP '+res.status+')'), 'bad');
+      }).catch(function(e){ noteOn(note, 'Failed: '+e.message, 'bad'); });
+    });
+  }
+  var MAIL_FIELDS = [['setPublicUrl', 'public_url'], ['setMailMethod', 'mail_method'], ['setMailFrom', 'mail_from'], ['setSmtpHost', 'smtp_host'],
+                     ['setSmtpPort', 'smtp_port'], ['setSmtpSec', 'smtp_security'], ['setSmtpUser', 'smtp_user'],
+                     ['setGraphTenant', 'graph_tenant'], ['setGraphClient', 'graph_client_id']];
+  function renderSettings(s, users){
+    var pwConfirm = ME.method === 'password';
+    var html = accountSection() + '<div id="usersBox">'+usersSection(users)+'</div>' + mailSection(s) +
+      '<h3 class="tl-title">Administrator password <span class="panel-meta">the break-glass login, always an admin</span></h3>'+
       field('setUser', 'Username', s.dash_user, null, {maxlength:64}) +
       field('setPass', 'New password', null, 'At least 12 characters. Leave blank to keep the current one.',
             {password:true, maxlength:200, placeholder:'Leave blank to keep current'}) +
       '<h3 class="tl-title">API keys <span class="panel-meta">for live reputation lookups on alert IPs</span></h3>'+
-      field('setAbuse', 'AbuseIPDB key', null, null, {password:true, maxlength:200,
-            placeholder: s.abuseipdb_key_configured ? 'Configured — leave blank to keep' : 'Not set'}) +
-      field('setVt', 'VirusTotal key', null, null, {password:true, maxlength:200,
-            placeholder: s.virustotal_key_configured ? 'Configured — leave blank to keep' : 'Not set'}) +
+      field('setAbuse', 'AbuseIPDB key', null, null, {password:true, maxlength:200, placeholder: secretPh(s.abuseipdb_key_configured)}) +
+      field('setVt', 'VirusTotal key', null, null, {password:true, maxlength:200, placeholder: secretPh(s.virustotal_key_configured)}) +
       '<h3 class="tl-title">Support contact</h3>'+
       field('setSupport', 'Shown when the logo is clicked', s.support, 'Format: Name|email|phone|url', {maxlength:2000}) +
       '<h3 class="tl-title">Live map</h3>'+
@@ -1856,52 +1962,68 @@
       '<div class="drawer-foot"><button class="ghost-btn" id="setOpenLayout">Open layout editor</button>'+
       '<span class="hint">Widgets, screens and the wall rotation have their own editor (Edit, top right of the tab bar).</span></div>'+
       '<h3 class="tl-title">Confirm</h3>'+
-      field('setCurPass', 'Current password', null, 'Needed only when you change the login, an API key or the support contact.',
-            {password:true, maxlength:200, placeholder:'Your current dashboard password'}) +
+      (pwConfirm ? field('setCurPass', 'Current password', null, 'Needed only when you change users, the login, email, an API key or the support contact.',
+            {password:true, maxlength:200, placeholder:'Your current dashboard password'}) :
+        ME.method === 'link' ? '<div class="hint">Changes to users, the login, email, API keys or the support contact need a sign-in from the last '+
+            (ME.reauth_minutes||15)+' minutes. If a save is refused, sign out and sign in with a new link.</div>' : '') +
       '<div class="drawer-foot"><button class="ctl" id="setSave" aria-pressed="true">Save</button><span class="hint" id="setNote"></span></div>';
     $('#setBody').innerHTML = html;
+    bindAccount(); bindUsers(); bindMail();
     $('#setOpenLayout').addEventListener('click', function(){ closeSettings(); setEdit(true); });
     $('#setSave').addEventListener('click', function(){
       var patch = {home: $('#setHome').value.trim(), sites: $('#setSites').value.trim(), ai_hosts: $('#setAi').value.trim(),
                    report_hour: $('#setReportHour').value.trim()};
       if($('#setUser').value.trim() !== (s.dash_user||'')) patch.dash_user = $('#setUser').value.trim();
       if($('#setSupport').value.trim() !== (s.support||'')) patch.support = $('#setSupport').value.trim();
-      if($('#setCurPass').value) patch.current_password = $('#setCurPass').value;
+      MAIL_FIELDS.forEach(function(f){ var v = $('#'+f[0]).value.trim(); if(v !== (s[f[1]]||'')) patch[f[1]] = v; });
+      if($('#setCurPass') && $('#setCurPass').value) patch.current_password = $('#setCurPass').value;
       if($('#setPass').value) patch.dash_pass = $('#setPass').value;
       if($('#setAbuse').value) patch.abuseipdb_key = $('#setAbuse').value;
       if($('#setVt').value) patch.virustotal_key = $('#setVt').value;
-      var credsChanged = patch.dash_pass || patch.dash_user !== undefined;
-      var note = $('#setNote'); note.textContent = 'Saving…'; note.style.color = '';
+      if($('#setSmtpPass').value) patch.smtp_pass = $('#setSmtpPass').value;
+      if($('#setGraphSecret').value) patch.graph_secret = $('#setGraphSecret').value;
+      var credsChanged = ME.method === 'password' && (patch.dash_pass || patch.dash_user !== undefined);
+      var note = $('#setNote'); noteOn(note, 'Saving…');
       saveSettings(patch).then(function(res){
-        if(res.status !== 200){ note.textContent = res.j.error || ('Save failed (HTTP '+res.status+')'); note.style.color = '#FF8A95'; return; }
+        if(res.status !== 200){ noteOn(note, res.j.error || ('Save failed (HTTP '+res.status+')'), 'bad'); return; }
         if(credsChanged){
-          note.textContent = 'Saved. Reloading to sign in with the new login…'; note.style.color = '#68F5B1';
+          noteOn(note, 'Saved. Reloading to sign in with the new login…', 'good');
           setTimeout(function(){ location.reload(); }, 1200);
           return;
         }
-        renderSettings(res.j);                    // rebuilds #setNote too, so set its text after, not before
-        var fresh = $('#setNote'); fresh.textContent = 'Saved.'; fresh.style.color = '#68F5B1';
-      }).catch(function(e){ note.textContent = 'Save failed: '+e.message; note.style.color = '#FF8A95'; });
+        openSettings('Saved.');                   // re-read: the email status and users depend on what was saved
+      }).catch(function(e){ noteOn(note, 'Save failed: '+e.message, 'bad'); });
     });
   }
   function saveSettings(patch){
     return fetch('/api/settings', {method: 'PUT', cache: 'no-store',
-      headers: {'Content-Type': 'application/json', 'X-Observatory': '1'}, body: JSON.stringify(patch)})
+      headers: {'Content-Type': 'application/json', 'X-Observatory': '1'}, body: JSON.stringify(patch)}).then(signedIn)
       .then(function(r){ return r.json().then(function(j){ return {status: r.status, j: j}; }); });
   }
-  function openSettings(){
+  function openSettings(saved){
     overlay.classList.add('on'); setDrawer.classList.add('on'); setDrawer.setAttribute('aria-hidden','false');
-    $('#setBody').innerHTML = '<div class="empty">Loading…</div>';
-    fetch('/api/settings', {cache:'no-store'}).then(function(r){ return r.json(); })
-      .then(function(s){ renderSettings(s); $('#closeSet').focus(); })
-      .catch(function(e){ $('#setBody').innerHTML = '<div class="empty">Could not load: '+esc(e.message)+'</div>'; });
+    if(!saved) $('#setBody').innerHTML = '<div class="empty">Loading…</div>';
+    fetch('/api/me', {cache:'no-store'}).then(signedIn).then(function(r){ return r.json(); }).then(function(m){
+      ME = m;
+      if(ME.role !== 'admin'){
+        $('#setBody').innerHTML = accountSection() +
+          '<div class="hint">You are a viewer: an admin manages users and settings. You can still change the layout (Edit, top right of the tab bar) and create reports.</div>';
+        bindAccount(); $('#closeSet').focus(); return;
+      }
+      var get = function(p){ return fetch(p, {cache:'no-store'}).then(signedIn).then(function(r){ return r.json(); }); };
+      return Promise.all([get('/api/settings'), get('/api/users')]).then(function(r){
+        renderSettings(r[0], r[1]);
+        if(typeof saved === 'string') noteOn($('#setNote'), saved, 'good');
+        else $('#closeSet').focus();
+      });
+    }).catch(function(e){ $('#setBody').innerHTML = '<div class="empty">Could not load: '+esc(e.message)+'</div>'; });
   }
   function closeSettings(){
     setDrawer.classList.remove('on'); setDrawer.setAttribute('aria-hidden','true');
     if(!document.querySelector('.drawer.on')) overlay.classList.remove('on');
     $('#settingsBtn').focus();
   }
-  $('#settingsBtn').addEventListener('click', openSettings);
+  $('#settingsBtn').addEventListener('click', function(){ openSettings(); });
   $('#closeSet').addEventListener('click', closeSettings);
   overlay.addEventListener('click', function(){ if(setDrawer.classList.contains('on')) closeSettings(); });
   document.addEventListener('keydown', function(e){ if(e.key==='Escape' && setDrawer.classList.contains('on')) closeSettings(); });

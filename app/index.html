@@ -209,6 +209,13 @@ pre.cmd{margin:0 0 12px;padding:10px 12px;background:var(--canvas);border:1px so
 .set-field label{font-family:var(--mono);font-size:11.5px;letter-spacing:.08em;color:var(--muted)}
 .set-field input{height:34px;background:var(--canvas);color:var(--ink);border:1px solid var(--border-strong);border-radius:4px;padding:0 8px;font:12px var(--ui);width:100%}
 .set-field .hint{font-size:11.5px;color:var(--muted)}
+.set-field select,.user-add select,.users select,.user-add input[type=email],#mailTestTo{height:34px;background:var(--canvas);color:var(--ink);border:1px solid var(--border-strong);border-radius:4px;padding:0 8px;font:12px var(--ui)}
+.set-field select{width:100%}
+.user-add{display:flex;flex-wrap:wrap;align-items:center;gap:10px;margin:12px 0 6px}
+.user-add input[type=email]{flex:1 1 220px;min-width:0}
+.user-add label{display:inline-flex;align-items:center;gap:6px}
+#mailTestTo{flex:1 1 200px;min-width:0}
+.users td{vertical-align:middle}
 .pager{display:flex;align-items:center;justify-content:space-between;gap:12px}
 .pager .ctl[disabled]{opacity:.35;cursor:default}
 .badges{display:flex;gap:8px;align-items:center;flex-wrap:wrap}

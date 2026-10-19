@@ -1,5 +1,44 @@
 # Release notes
 
+## 1.22.0 — 2026-10-19
+
+**For users**
+- **Several people, each with their own sign-in.** An admin adds people by email address in Settings → *Users* and
+  picks a role. They sign in by entering their address on the new sign-in page and clicking the one-time link the
+  dashboard emails them. There is no password to share or remember. Removing someone signs them out at once.
+- **Two roles.** *Viewers* see every panel, change the layout and create reports. *Admins* also manage users,
+  settings, API keys and *Apply fix*.
+- **Email by SMTP or Microsoft 365.** Settings → *Email for sign-in links*: any SMTP server (Microsoft 365, Google
+  Workspace, Amazon SES, your own relay), or Microsoft 365 through the Graph API with an Entra app registration.
+  *Send test email* checks the setup.
+- **The administrator password still works**, as the break-glass admin login on the sign-in page (and for scripts).
+  Until email is set up, it is the only way in, exactly as before.
+- New **sign-in page** and a **Sign out** button (Settings → *Signed in*).
+- `sudo ./install.sh --admin-email you@example.com --public-url https://observatory.example.com:8765` adds the first
+  admin and sets the address links point to.
+
+**Technical**
+- New `app/users_store.py` (users, sessions, one-time links; `/data/users.json`, mode 0600) and `app/mailer.py`
+  (SMTP with STARTTLS/TLS and certificate checks, or Graph `client_credentials` + `users/{sender}/sendMail`).
+- Sessions: `obs_session` cookie, `HttpOnly; SameSite=Strict` (`Secure` on HTTPS), `SESSION_DAYS` (default 7). Only
+  SHA-256 digests of session and link tokens are stored. Roles are read from the user list on every request.
+  A password session is pinned to the password it was opened with and ends when that password changes.
+- Links: 32-byte random token in the URL `#fragment` (never sent to a server, proxy log or `Referer`), used only on
+  the reader's click (mail scanners that open links cannot spend it), once, within `LINK_MINUTES` (15). They point at
+  the configured public address, never the request's `Host` header. `/auth/request` answers the same for every
+  address, sends in the background, and allows 5 requests per client address and 3 per mailbox in 15 minutes.
+  Wrong tokens count towards the per-address lockout.
+- Sensitive changes (users, login, email settings, API keys, support contact, *Apply fix*) need the current password
+  for a password sign-in, or a link sign-in from the last `REAUTH_MINUTES` (15). All are logged as `audit:` lines with
+  the user's address. Admins cannot remove or demote themselves.
+- Unauthenticated requests get `302 /login` (page) or `401` JSON (API), no longer a `WWW-Authenticate` challenge, so
+  the browser's own password box no longer appears. HTTP Basic with the administrator password is still accepted.
+- New installer options `--admin-email`, `--public-url` (env `ADMIN_EMAIL`, `PUBLIC_URL`).
+- Fixed: the live map's pulse rings could get a negative radius for sites south of the equator or west of
+  Greenwich, which threw a canvas error now and then.
+- New `tests/test_users.py`: 21 tests (store, Graph request shapes, and the full flow against the real server and a
+  fake SMTP server).
+
 ## 1.21.1 — 2026-10-19
 
 **For users**

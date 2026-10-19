@@ -1,5 +1,11 @@
 # Release notes
 
+## 1.14.1 — 2026-10-18
+
+**For users**
+- SSH attacks reported by Syslog now show port 22 in the blocked list, instead of the attacker's random source
+  port.
+
 ## 1.14.0 — 2026-10-18
 
 **For users**

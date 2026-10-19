@@ -12,7 +12,7 @@ import urllib.error, urllib.request
 from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-VERSION = "1.14.0"
+VERSION = "1.14.1"
 HERE = os.path.dirname(os.path.abspath(__file__))
 if HERE not in sys.path:                          # the container runs "python3 -I", which leaves this folder off sys.path
     sys.path.insert(0, HERE)
@@ -1374,7 +1374,6 @@ def build_net_geo(window, dtype, port=None):
 SYSLOG_PHRASES = ("Invalid user", "Failed password", "Failed publickey", "authentication failure", "preauth",
                   "Unable to negotiate", "maximum authentication attempts", "Accepted")
 IPV4_RE = re.compile(r"(?<![\d.])(\d{1,3}(?:\.\d{1,3}){3})(?![\d.])")
-PORT_RE = re.compile(r"\bport (\d{1,5})\b")
 
 
 def syslog_ip(message):
@@ -1408,10 +1407,10 @@ def attacker_rows(window, dtype, port=None):
             row = rows.setdefault((site, ip), {"site": site, "name": (s_.get("origin") or {}).get("host") or site,
                                                "ip": ip, "count": 0, "blocked": 0})
             row["count"] += 1; row["blocked"] += bad
-            if bad and len(ticker) < 14:
-                m = PORT_RE.search(msg)
+            if bad and len(ticker) < 14:                 # the "port N" in sshd lines is the attacker's source port
+                ssh = str((s_.get("origin") or {}).get("process") or "").startswith("sshd")
                 ticker.append({"t": s_.get("@timestamp"), "ip": ip, "site": site, "type": "syslog",
-                               "port": m.group(1) if m else None, "what": msg[:80]})
+                               "port": 22 if ssh else None, "what": msg[:80]})
         hits = r.get("hits", {}).get("hits", [])
         if hits:
             newest = datetime.fromisoformat(hits[0]["_source"]["@timestamp"].replace("Z", "+00:00")).timestamp() * 1000

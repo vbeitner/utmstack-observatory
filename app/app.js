@@ -762,9 +762,10 @@
     } catch(e){ return; }                              // no WebGL
     PENDING = m;
     m.touchZoomRotate.disableRotation();
-    m.on('styleimagemissing', function(e){                // the tile style names two icons it does not ship: blank them
-      if(!m.hasImage(e.id)) m.addImage(e.id, {width: 1, height: 1, data: new Uint8Array(4)});
-    });
+    // the tile style names two icons it does not ship: hand MapLibre a blank one instead of a console warning
+    var blank = function(id){ if(!m.hasImage(id)) m.addImage(id, {width: 1, height: 1, data: new Uint8Array(4)}); };
+    if(m.setMissingStyleImageResolver) m.setMissingStyleImageResolver(blank);
+    else m.on('styleimagemissing', function(e){ blank(e.id); });
     var credit = document.createElement('a');
     credit.className = 'map-credit'; credit.textContent = MAP_CREDIT;
     credit.href = 'https://www.openstreetmap.org/copyright'; credit.target = '_blank'; credit.rel = 'noopener noreferrer';

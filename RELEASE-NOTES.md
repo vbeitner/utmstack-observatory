@@ -1,5 +1,15 @@
 # Release notes
 
+## 1.21.1 — 2026-10-19
+
+**For users**
+- No user-visible changes.
+
+**Technical**
+- MapLibre 6: blank the two icons the tile style references but does not ship through
+  `setMissingStyleImageResolver` (6.x no longer resolves them from the `styleimagemissing` event), so the browser
+  console stays free of "Image could not be loaded" warnings.
+
 ## 1.21.0 — 2026-10-19
 
 **For users**

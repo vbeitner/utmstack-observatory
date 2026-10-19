@@ -32,6 +32,27 @@ class ContainerStart(unittest.TestCase):
             p.kill()
             p.wait()
 
+    def test_demo_mode_serves_synthetic_data_without_opensearch(self):
+        env = {"PATH": os.environ.get("PATH", ""), "DEMO": "1", "DATA_DIR": tempfile.mkdtemp(),
+               "BIND": "127.0.0.1", "PORT": "18799", "ALLOW_NO_AUTH": "1"}
+        p = subprocess.Popen([sys.executable, "-I", os.path.join(ROOT, "app", "server.py")], env=env,
+                             stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+        try:
+            line = ""
+            deadline = time.time() + 10
+            while time.time() < deadline and " on http" not in line and p.poll() is None:
+                line = p.stdout.readline()
+            self.assertIn("DEMO DATA", line)
+            import json
+            import urllib.request
+            geo = json.load(urllib.request.urlopen("http://127.0.0.1:18799/api/geo?window=300", timeout=10))
+            self.assertGreater(geo["total"], 0)
+            alerts = json.load(urllib.request.urlopen("http://127.0.0.1:18799/api/alerts", timeout=10))
+            self.assertGreater(alerts["total"], 0)
+        finally:
+            p.kill()
+            p.wait()
+
 
 if __name__ == "__main__":
     unittest.main()

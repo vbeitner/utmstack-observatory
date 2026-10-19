@@ -1,5 +1,19 @@
 # Release notes
 
+## 1.15.0 — 2026-10-18
+
+**For users**
+- New **demo mode** for sales demos, screenshots and the manual: start the dashboard with `DEMO=1` and it shows a
+  fictional organisation (eight Canadian sites, a few servers and an M365 tenant) with realistic, moving sample data
+  on every panel — no SIEM connection needed. A yellow **DEMO DATA** tag next to the title makes it obvious.
+  All public addresses come from the reserved documentation ranges, so no screenshot can show a real address.
+- No change for normal installs: demo mode is off unless `DEMO=1` is set.
+
+**Technical**
+- New `app/demo.py`; `server.py` swaps its data functions for the demo ones when `DEMO=1` and skips the
+  OpenSearch password lookup and GeoIP downloads. The map exposes its MapLibre handle on `#mapBase.__map` for
+  scripted captures.
+
 ## 1.14.2 — 2026-10-18
 
 **For users**

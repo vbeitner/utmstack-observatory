@@ -12,7 +12,7 @@ import urllib.error, urllib.request
 from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-VERSION = "1.14.2"
+VERSION = "1.15.0"
 HERE = os.path.dirname(os.path.abspath(__file__))
 if HERE not in sys.path:                          # the container runs "python3 -I", which leaves this folder off sys.path
     sys.path.insert(0, HERE)
@@ -1909,8 +1909,14 @@ class Server(ThreadingHTTPServer):
             self._conn_slots.release()
 
 
+# Demo mode: synthetic data for sales demos, screenshots and the manual (see demo.py). No OpenSearch needed.
+DEMO = env("DEMO") == "1"
+if DEMO:
+    import demo  # noqa: E402
+    demo.install(globals())
+
 if __name__ == "__main__":
-    if TRANSPORT == "docker-exec" and not OS_PASS:
+    if TRANSPORT == "docker-exec" and not OS_PASS and not DEMO:
         OS_PASS = get_password()
     if not current_dash_pass() and BIND not in ("127.0.0.1", "localhost", "::1") and env("ALLOW_NO_AUTH") != "1":
         sys.exit("Refusing to listen on %s without a login. Set DASH_PASS (or DASH_PASS_FILE), "
@@ -1918,7 +1924,8 @@ if __name__ == "__main__":
     threading.Thread(target=refresher, daemon=True).start()
     threading.Thread(target=history_loop, daemon=True).start()
     threading.Thread(target=lag_loop, daemon=True).start()
-    GEO.load(); GEO.start()
+    if not DEMO:
+        GEO.load(); GEO.start()
     threading.Thread(target=report_loop, daemon=True).start()
     srv = Server((BIND, PORT), Handler)
     scheme = "http"
@@ -1929,5 +1936,5 @@ if __name__ == "__main__":
         srv.tls_context = tls
         scheme = "https"
     print("UTMStack Observatory %s on %s://%s:%d  (opensearch via %s, login %s, data %s)" % (
-        VERSION, scheme, BIND, PORT, "direct" if TRANSPORT == "http" else "docker-exec", "on" if current_dash_pass() else "OFF", DATA_DIR), flush=True)
+        VERSION, scheme, BIND, PORT, "DEMO DATA" if DEMO else "direct" if TRANSPORT == "http" else "docker-exec", "on" if current_dash_pass() else "OFF", DATA_DIR), flush=True)
     srv.serve_forever()

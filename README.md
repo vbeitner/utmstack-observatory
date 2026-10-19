@@ -34,8 +34,8 @@ cd utmstack-observatory
 sudo ./install.sh
 ```
 
-The installer finds the stack, reads the OpenSearch credentials UTMStack already uses, checks they work,
-builds the image, starts the service, and prints the URL and a generated login. Re-running it upgrades in place and
+The installer finds the stack, reads the OpenSearch credentials UTMStack already uses, checks they work, uses them
+once to create a dedicated read-only OpenSearch user for the dashboard (see Security), builds the image, starts the service, and prints the URL and a generated login. Re-running it upgrades in place and
 keeps your password, settings and history.
 
 Common options:
@@ -53,6 +53,7 @@ Common options:
 | `--home "lat,lon,City"` | where unplaceable firewalls are drawn (default Toronto) |
 | `--support "Name\|email\|phone\|url"` | contact shown when the logo is clicked (default Cyber Security Canada, info@cybersecuritycanada.com) |
 | `--abuseipdb-key KEY` / `--virustotal-key KEY` | enable live IP-reputation lookups on alert detail (see Security) |
+| `--os-account reader\|backend` | OpenSearch account for the dashboard: the dedicated read-only user (default) or UTMStack's administrator |
 
 Other commands: `sudo ./install.sh status | logs | password [NEW] | uninstall [--purge]`.
 `uninstall` keeps your stored history; `--purge` deletes it, the config and the image.
@@ -93,6 +94,17 @@ optionally from proxycheck.io for the rest (`--geoip-online-daily`, default 100 
 - **Swarm publishes the port on every interface.** Restrict it with your firewall. Example allowing only Tailscale and localhost:
   `iptables -I DOCKER-USER -p tcp --dport 8765 ! -s 100.64.0.0/10 -j DROP` (adapt, and persist it your usual way).
 - The container is read-only, drops all capabilities, runs as an unprivileged user, and has no Docker socket. It only *reads* OpenSearch.
+- **Read-only OpenSearch account.** The installer uses UTMStack's backend credentials (the OpenSearch administrator) only
+  to create, through the OpenSearch security REST API, a role `observatory_read` and a user `observatory_reader`. The
+  role allows `read` and `view_index_metadata` on `v11-*`, `indices:monitor/*` on all indices (index and shard lists on
+  the SIEM health panel) and `cluster:monitor/*` (cluster health, allocation explain). It cannot write, delete or change
+  settings. The user's password is random, kept in `/etc/utmstack-observatory/os_reader.pass` (root only) so re-runs
+  keep the same user, and passed to the container as a Docker secret (`uid=10001`, mode `0400`). The installer tests
+  the new account before using it. If OpenSearch runs without the security plugin, if node1 is on another host, or if
+  any API call or test fails, it warns and falls back to the backend credentials. The last lines of the install
+  output show which account is in use. `--os-account backend` switches back to the administrator account on purpose.
+  To remove the user after uninstalling, delete `observatory_reader` and `observatory_read` in OpenSearch's security
+  settings (or `DELETE _plugins/_security/api/internalusers/observatory_reader` and `.../roles/observatory_read`).
 - It connects to OpenSearch without verifying its certificate (UTMStack uses an internal self-signed one on a private network);
   set `OS_CA_FILE` to verify it.
 - Full assessment, findings and fixes: [docs/security/SECURITY-ASSESSMENT.md](docs/security/SECURITY-ASSESSMENT.md).
@@ -130,8 +142,9 @@ cd utmstack-observatory
 sudo ./install.sh                 # or: git pull && sudo ./install.sh   to upgrade
 ```
 
-Nothing secret is in git. The installer reads the OpenSearch credentials from UTMStack's own service spec, generates
-the dashboard password into `/etc/utmstack-observatory/admin.pass` (root only) on first install, and keeps it, the
+Nothing secret is in git. The installer reads the OpenSearch credentials from UTMStack's own service spec, uses them
+to create the read-only OpenSearch user (password in `/etc/utmstack-observatory/os_reader.pass`), generates
+the dashboard password into `/etc/utmstack-observatory/admin.pass` (root only) on first install, and keeps them, the
 settings (`config.env`) and the history volume on every upgrade.
 
 The world outline `app/land.json` is generated from Natural Earth 1:110m land (public domain) via world-atlas 2.0.2:
@@ -160,7 +173,7 @@ The installer sets these; you only need them to run `app/server.py` by hand.
 | Variable | Default | |
 |---|---|---|
 | `OS_URL` | *(none)* | OpenSearch URL, e.g. `https://node1:9200`. Empty = bare-metal mode using `sudo docker exec` |
-| `OS_USER`, `OS_PASS` / `OS_PASS_FILE` | | OpenSearch credentials (omit if security is off) |
+| `OS_USER`, `OS_PASS` / `OS_PASS_FILE` | | OpenSearch credentials (omit if security is off); the installer sets the read-only `observatory_reader` |
 | `DASH_USER`, `DASH_PASS` / `DASH_PASS_FILE` | `admin` | dashboard login. Without a password it only listens on 127.0.0.1 |
 | `PORT`, `BIND` | `8765`, `0.0.0.0` | |
 | `TLS_CERT`, `TLS_KEY` | | enable HTTPS |

@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | **Product** | UTMStack Observatory |
-| **Versions** | Assessed: 1.14.2 (deployed) and 1.15.0 (source). Retested after fixes: **1.16.0** |
+| **Versions** | Assessed: 1.14.2 (deployed) and 1.15.0 (source). Retested after fixes: **1.16.0**; OBS-08 fixed in **1.19.0** |
 | **Dates** | 18–19 October 2026 |
 | **Type** | White-box review: automated scanning, manual source review, and live tests against isolated local instances |
 | **Performed by** | AI-assisted assessment (Claude, Anthropic) for the product owner. This is not a third-party penetration test. |
@@ -30,6 +30,8 @@ The assessment raised **18 findings**: 7 medium, 9 low and 2 informational. In v
 | Mitigated or partly fixed (the remaining part is an accepted risk) | 5 |
 | Open (recommendation, accepted for this release) | 1 |
 
+OBS-08, the one open finding, is fixed in 1.19.0 (dedicated read-only OpenSearch user).
+
 The most significant issues, all now fixed:
 
 - A slow-connection attack could make the dashboard unavailable before login (OBS-02).
@@ -42,7 +44,8 @@ The most significant issues, all now fixed:
 
 The main residual risks are:
 
-- The dashboard reads OpenSearch with UTMStack's administrator account (OBS-08).
+- The dashboard read OpenSearch with UTMStack's administrator account (OBS-08). Fixed in 1.19.0; the installer falls
+  back to that account, with a warning, where the security plugin is off or the read-only user cannot be set up.
 - Existing installs stay on plain HTTP until they are reinstalled with `--tls`.
 - Unfixed Debian base-image CVEs (no fixes available upstream).
 
@@ -100,7 +103,7 @@ a trusted network next to the SIEM, behind a login.
 | OBS-05 | Any signed-in user can change password, keys and support link without re-auth; no audit log | Medium | **Fixed** (re-auth plus audit log); separate viewer role on roadmap |
 | OBS-06 | Password saved in the UI cannot be revoked with `install.sh password` | Medium | **Fixed** |
 | OBS-07 | DNS rebinding against password-less localhost mode | Medium | **Fixed** |
-| OBS-08 | Dashboard uses UTMStack's OpenSearch administrator account | Low | **Open**: recommendation, accepted |
+| OBS-08 | Dashboard uses UTMStack's OpenSearch administrator account | Low | **Fixed in 1.19.0** (read-only user; warned fallback) |
 | OBS-09 | OpenSearch TLS certificate not verified | Low | **Mitigated** (`OS_CA_FILE` option; default unchanged for UTMStack's internal certificate) |
 | OBS-10 | Dashboard password stored in clear text in `settings.json` | Low | **Fixed** (PBKDF2-SHA256, 600,000 iterations); API keys stay recoverable by design |
 | OBS-11 | Lockout is per IP only; 8-character minimum password | Low | **Partly fixed** (12-character minimum; real client addresses on Swarm since 1.18.0); proxy-aware limits on roadmap |
@@ -229,7 +232,7 @@ visited by the operator could read SIEM data or set a password.
 
 **Retest.** `test_obs07_dns_rebinding_host_is_refused`.
 
-### OBS-08 — OpenSearch administrator account · Low · Open (accepted)
+### OBS-08 — OpenSearch administrator account · Low · Fixed in 1.19.0
 
 **Description.** The installer reuses the credentials of UTMStack's backend, which is the OpenSearch administrator.
 No code path writes to OpenSearch, but any future code-execution or request-forgery bug would carry full SIEM rights,
@@ -239,6 +242,28 @@ which is root-equivalent on the host.
 **Recommendation.** Have the installer create a read-only OpenSearch role (`read` and `view_index_metadata` on
 `v11-*`, plus `cluster:monitor/*`) and a dedicated user. Use the Swarm transport rather than `docker exec`. Accepted
 for this release because UTMStack's own security plugin setup varies by version and needs testing on each.
+
+**Fix (1.19.0).** The installer uses the backend's credentials once, through the OpenSearch security REST API
+(`_plugins/_security`, or `_opendistro/_security` on older versions), to create or update:
+
+- role `observatory_read`: `cluster:monitor/*`; `read` and `view_index_metadata` on `v11-*`; and `indices:monitor/*` on
+  all indices. The last one is needed by `_cat/indices` and `_cat/shards` on the SIEM health panel, which list every
+  index, including hidden ones. It exposes index names, sizes and shard states, not documents.
+- user `observatory_reader` with that role assigned directly (no role mapping is touched), and a random 32-character
+  password kept in `/etc/utmstack-observatory/os_reader.pass` (root only, mode 0600) so re-runs keep the same user and
+  password. The container receives it as a Docker secret (`uid=10001`, mode `0400`).
+
+Every query in `app/server.py` was checked against the role: searches and counts on `v11-log-*`, `v11-alert-*`,
+`v11-statistics-*` and `v11-*`; `_cat/indices` (on `v11-*` and on all indices with `expand_wildcards=all`);
+`_cat/shards`; `_cluster/health`; `_cluster/allocation/explain`. `tests/test_os_reader.py` keeps that check
+automatic: a new query path fails the test until its permissions are reviewed. Before switching, the installer tests the
+new user against cluster health, a `v11-*` count and the full index list. If the security plugin is off, node1 runs on
+another host, any API call fails, or the new user fails the health or `v11-*` test, the installer warns and keeps the
+backend credentials. `--os-account backend` chooses them on purpose.
+
+**Remaining.** The fallback cases still run with administrator rights; the install output names the account in use.
+The `docker exec` transport (bare-metal runs only, not used by the installer) is unchanged. The fix has been tested
+against a stubbed security API, not yet on a live UTMStack host.
 
 ### OBS-09 — OpenSearch certificate not verified · Low · Mitigated
 
@@ -449,7 +474,7 @@ with.
 
 ## 8. Recommendations for the next release
 
-1. A read-only OpenSearch role and user created by the installer (OBS-08).
+1. ~~A read-only OpenSearch role and user created by the installer (OBS-08).~~ Done in 1.19.0.
 2. MapLibre GL JS 6.4.1 or later (OBS-04).
 3. A read-only viewer login for wall screens, with anonymisation enforced on the server (OBS-05).
 4. Trusted-proxy support and a global login-failure budget (OBS-11).
@@ -459,6 +484,7 @@ with.
 ## Appendix A — Deployment hardening checklist
 
 - [ ] HTTPS on (`--tls`, or a reverse proxy with a trusted certificate)
+- [ ] Install output ends with `OpenSearch account: observatory_reader` (not the administrator account)
 - [ ] Port 8765 restricted with the host firewall (`DOCKER-USER` chain) to the admin network or VPN
 - [ ] Installer-generated password kept, or a new one of at least 12 characters
 - [ ] Settings-panel API keys entered only by administrators; `/data` backups treated as sensitive

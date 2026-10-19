@@ -368,7 +368,7 @@ sudo ./install.sh
 ```
 
 The installer finds the UTMStack stack, reads the OpenSearch credentials UTMStack already uses, checks they work,
-builds the image, starts the service and prints the address and a generated password.
+uses them once to create a dedicated **read-only** OpenSearch user for the dashboard, builds the image, starts the service and prints the address and a generated password.
 
 To **upgrade**, get the new version and run the installer again (`git pull && sudo ./install.sh`). Password,
 settings and history are kept.
@@ -406,6 +406,7 @@ Options are remembered in `/etc/utmstack-observatory/config.env`; pass one again
 | `--virustotal-key KEY` | off | VirusTotal reputation lookups |
 | `--proxycheck-key KEY` | none | proxycheck.io key for the online location fallback |
 | `--geoip-online-daily N` | `100` | Daily cap on online lookups; `0` disables them |
+| `--os-account reader\|backend` | `reader` | OpenSearch account for the dashboard: the read-only `observatory_reader`, or UTMStack's administrator |
 
 ### Environment variables
 
@@ -414,7 +415,7 @@ Only needed when running `app/server.py` yourself; the installer sets them for y
 | Variable | Default | Meaning |
 |---|---|---|
 | `OS_URL` | | OpenSearch URL, e.g. `https://node1:9200`. Empty = use `docker exec` on the host |
-| `OS_USER`, `OS_PASS` / `OS_PASS_FILE` | | OpenSearch credentials |
+| `OS_USER`, `OS_PASS` / `OS_PASS_FILE` | | OpenSearch credentials (the installer sets the read-only `observatory_reader`) |
 | `DASH_USER`, `DASH_PASS` / `DASH_PASS_FILE` | `admin` | Dashboard login. Without a password it only listens on 127.0.0.1 |
 | `PORT`, `BIND` | `8765`, `0.0.0.0` | Listening port and address |
 | `TLS_CERT`, `TLS_KEY` | | Certificate and key files; enables HTTPS |
@@ -450,7 +451,10 @@ Only needed when running `app/server.py` yourself; the installer sets them for y
 
 ## 16. Security and privacy
 
-- **Read-only**: the dashboard only reads OpenSearch. It cannot change UTMStack.
+- **Read-only**: the dashboard only reads OpenSearch. It cannot change UTMStack. Since 1.17 it also reads with its own
+  read-only OpenSearch account (`observatory_reader`), so even a fault in the dashboard could not delete or change SIEM
+  data. If that account cannot be set up (for example on a UTMStack without OpenSearch security), the installer warns
+  and uses UTMStack's own account instead. The install output ends with the account in use.
 - **Login on everything** except a minimal health check. Repeated wrong passwords lock out the source address.
   Changing the login, an API key or the support contact also asks for the current password, and every change is
   logged.
@@ -477,6 +481,8 @@ The security assessment is in [`../security/SECURITY-ASSESSMENT.md`](../security
 |---|---|
 | "No traffic on the map" | Usually ingestion, not the dashboard: is the firewall still sending logs to UTMStack? Check **Data sources**. |
 | Installer: OpenSearch rejects the credentials (HTTP 401) | UTMStack itself is broken (its backend uses the same credentials). Fix UTMStack first, then re-run the installer. |
+| Installer warns it is using "the backend's administrator account" | The read-only OpenSearch user could not be set up; the warning says why. The dashboard still works. Fix the cause and re-run the installer. |
+| SIEM health panel shows an error, installer warned "cannot list all indices" | This OpenSearch does not let the read-only user list every index. Re-run with `--os-account backend`. |
 | Trends shows *n/a* or *partial* | Not enough history yet: about a day for daily, two weeks for weekly comparisons. |
 | Ingest lag ~1 s but feeds are late | The headline is the newest event; click the card for the per-source delay. |
 | AI Traffic empty or low | It only sees traffic that crosses the firewall, not traffic inside the LAN. |

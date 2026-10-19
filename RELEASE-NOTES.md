@@ -1,5 +1,16 @@
 # Release notes
 
+## 1.13.0 — 2026-10-18
+
+**For users**
+- **Tor and VPN are now told apart on the map:** traffic mostly from Tor exit nodes is **purple**, traffic mostly
+  from known VPN ranges stays **yellow**. The legend, the badges in the blocked list and the city tooltips show
+  them separately.
+
+**Technical**
+- `net_counts()` returns `{vpn, tor, hosting}`; arcs carry all three. An arc/dot takes the Tor or VPN color when
+  the two together are at least half its connections, choosing whichever of the two is larger.
+
 ## 1.12.0 — 2026-10-18
 
 **For users**

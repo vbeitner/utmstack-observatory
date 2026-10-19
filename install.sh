@@ -20,6 +20,8 @@
 #          --no-health-fix   (no "Apply fix" button in the SIEM-health panel; it shows the commands instead)
 #          --no-real-ip-rule (do not exempt the dashboard from Tailscale's address rewriting; see ensure_real_ip)
 #          --os-account reader|backend   (reader: dedicated read-only OpenSearch user, the default; backend: UTMStack's admin)
+#          --admin-email ADDR  (invite this address as an admin; it signs in with an emailed link once email is set up)
+#          --public-url URL    (the address people open, e.g. https://observatory.example.com:8765; sign-in links point here)
 set -euo pipefail
 
 SRC="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -196,6 +198,7 @@ case "${1:-}" in install|uninstall|status|logs|password) CMD="$1"; shift;; esac
 PORT=8765; DASH_USER=admin; AI_HOSTS=""; TLS=0; TZ_NAME=""; STACK=""; SITES=""; HOME_LOC=""; SUPPORT=""
 DASH_USER_FLAG=0; ABUSEIPDB_FLAG=0; VIRUSTOTAL_FLAG=0
 TLS_CERT_SRC=""; TLS_KEY_SRC=""; NEW_PASS=""; IMPORT=""; PURGE=0; ABUSEIPDB_KEY=""; VIRUSTOTAL_KEY=""; PROXYCHECK_KEY=""; GEOIP_ONLINE_DAILY=100; OS_ACCOUNT=reader; HEALTH_FIX=1; REAL_IP_RULE=1
+ADMIN_EMAIL=""; PUBLIC_URL=""
 [ -f "$CONF" ] || TLS=1                          # new installs: HTTPS with a self-signed certificate unless --no-tls
 # shellcheck disable=SC1090
 [ -f "$CONF" ] && . "$CONF"
@@ -216,7 +219,8 @@ while [ $# -gt 0 ]; do
     --no-health-fix) HEALTH_FIX=0; shift;;  --health-fix) HEALTH_FIX=1; shift;;
     --no-real-ip-rule) REAL_IP_RULE=0; shift;;  --real-ip-rule) REAL_IP_RULE=1; shift;;
     --os-account) case "$2" in reader|backend) OS_ACCOUNT="$2";; *) die "--os-account: use reader or backend";; esac; shift 2;;
-    --purge) PURGE=1; shift;;               -h|--help) sed -n '2,17p' "$0"; exit 0;;
+    --admin-email) ADMIN_EMAIL="$2"; shift 2;;  --public-url) PUBLIC_URL="${2%/}"; shift 2;;
+    --purge) PURGE=1; shift;;               -h|--help) sed -n '2,23p' "$0"; exit 0;;
     *) die "unknown option: $1";;
   esac
 done
@@ -360,7 +364,8 @@ SECRETS=(); mksecret observatory_dash_pass "$DASH_PASS"; SECRETS+=(--secret "sou
 ENVS=(--env "OS_URL=$SCHEME://$ES_HOST:$ES_PORT" --env "DASH_USER=$DASH_USER" --env "DASH_PASS_FILE=/run/secrets/dash_pass"
       --env "TZ=$TZ_NAME" --env "HOST_NAME=$(hostname)" --env "AI_HOSTS=$AI_HOSTS"
       --env "SITE_LOCATIONS=$SITES" --env "HOME_LOCATION=$HOME_LOC"
-      --env "SUPPORT_CONTACT=$SUPPORT" --env "INSTALLED_AT=$(date -u +%Y-%m-%dT%H:%M:%SZ)")
+      --env "SUPPORT_CONTACT=$SUPPORT" --env "INSTALLED_AT=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+      --env "ADMIN_EMAIL=$ADMIN_EMAIL" --env "PUBLIC_URL=$PUBLIC_URL")
 if [ -n "$OS_RUN_USER" ]; then
   mksecret observatory_os_pass "$OS_RUN_PASS"; SECRETS+=(--secret "source=observatory_os_pass_$TS,target=os_pass,uid=10001,mode=0400")
   ENVS+=(--env "OS_USER=$OS_RUN_USER" --env "OS_PASS_FILE=/run/secrets/os_pass")
@@ -434,8 +439,8 @@ else
   [ "$auth" = 200 ] || warn "login check returned HTTP $auth"
 fi
 
-{ printf 'PORT=%q\nDASH_USER=%q\nAI_HOSTS=%q\nTLS=%q\nTZ_NAME=%q\nSTACK=%q\nSITES=%q\nHOME_LOC=%q\nSUPPORT=%q\nABUSEIPDB_KEY=%q\nVIRUSTOTAL_KEY=%q\nPROXYCHECK_KEY=%q\nGEOIP_ONLINE_DAILY=%q\nOS_ACCOUNT=%q\nHEALTH_FIX=%q\nREAL_IP_RULE=%q\n' \
-    "$PORT" "$DASH_USER" "$AI_HOSTS" "$TLS" "$TZ_NAME" "$STACK" "$SITES" "$HOME_LOC" "$SUPPORT" "$ABUSEIPDB_KEY" "$VIRUSTOTAL_KEY" "$PROXYCHECK_KEY" "$GEOIP_ONLINE_DAILY" "$OS_ACCOUNT" "$HEALTH_FIX" "$REAL_IP_RULE"
+{ printf 'PORT=%q\nDASH_USER=%q\nAI_HOSTS=%q\nTLS=%q\nTZ_NAME=%q\nSTACK=%q\nSITES=%q\nHOME_LOC=%q\nSUPPORT=%q\nABUSEIPDB_KEY=%q\nVIRUSTOTAL_KEY=%q\nPROXYCHECK_KEY=%q\nGEOIP_ONLINE_DAILY=%q\nOS_ACCOUNT=%q\nHEALTH_FIX=%q\nREAL_IP_RULE=%q\nADMIN_EMAIL=%q\nPUBLIC_URL=%q\n' \
+    "$PORT" "$DASH_USER" "$AI_HOSTS" "$TLS" "$TZ_NAME" "$STACK" "$SITES" "$HOME_LOC" "$SUPPORT" "$ABUSEIPDB_KEY" "$VIRUSTOTAL_KEY" "$PROXYCHECK_KEY" "$GEOIP_ONLINE_DAILY" "$OS_ACCOUNT" "$HEALTH_FIX" "$REAL_IP_RULE" "$ADMIN_EMAIL" "$PUBLIC_URL"
   [ -n "$TLS_CERT_SRC" ] && printf 'TLS_CERT_SRC=%q\nTLS_KEY_SRC=%q\n' "$TLS_CERT_SRC" "$TLS_KEY_SRC"; } > "$CONF"; chmod 600 "$CONF"
 
 echo
@@ -445,6 +450,7 @@ echo "    user: $DASH_USER"
 if [ "$GENERATED" = 1 ]; then echo "    password: $DASH_PASS   (shown once; also in $PASS_FILE)"
 elif [ -n "$NEW_PASS" ]; then echo "    password: (the one you set)"; else echo "    password: (unchanged; stored in $PASS_FILE)"; fi
 echo "    password file: $PASS_FILE    config: $CONF"
+[ -z "$ADMIN_EMAIL" ] || echo "    admin by email link: $ADMIN_EMAIL  (set up email in Settings → Email for sign-in links)"
 [ -z "$OVERRIDDEN" ] || echo "    note: a login set in the Settings panel ($OVERRIDDEN) overrides the above; 'install.sh password' resets it"
 echo "    OpenSearch account: ${OS_RUN_USER:-none (no authentication)}"
 [ "$TLS" = 1 ] || warn "plain HTTP: the login travels unencrypted. Use a trusted network/VPN, or re-run with --tls."

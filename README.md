@@ -85,11 +85,14 @@ optionally from proxycheck.io for the rest (`--geoip-online-daily`, default 100 
 
 ## Security
 
-- **Login required.** HTTP Basic auth. The password is in `/etc/utmstack-observatory/admin.pass` (root only) and is passed to the
-  container as a Docker secret. Change it with `sudo ./install.sh password`.
+- **Login required.** Invited users sign in with a one-time link sent by email (see [Users and email sign-in](#users-and-email-sign-in)).
+  The installer's username and password are the break-glass admin login, on the sign-in page or as HTTP Basic for scripts.
+  The password is in `/etc/utmstack-observatory/admin.pass` (root only) and is passed to the container as a Docker
+  secret. Change it with `sudo ./install.sh password`.
 - **HTTPS by default on new installs** (self-signed). Installs from before 1.16 keep plain HTTP until re-run with `--tls`;
   on plain HTTP the login crosses the network unencrypted, so only use it over a VPN / trusted network.
-- Changing the login, an API key or the support contact in the Settings panel needs the current password; every
+- Changing users, the login, email settings, an API key or the support contact needs the current password (or, for
+  someone signed in by email link, a sign-in from the last 15 minutes); every
   settings and shared-layout change is logged (`audit:` lines in `install.sh logs`). A password set there is stored as a
   PBKDF2 hash, and `install.sh password` removes it again.
 - **Real client addresses (1.18+).** The installer publishes the port in Swarm's *host* mode on the manager node, not
@@ -141,6 +144,32 @@ reloads the page so you log back in with the new one. A setting saved here overr
 flag/env var; leaving a field blank on save clears the override and falls back to whatever `install.sh` set.
 Dashboard layout (widgets, screens, wall rotation) has its own editor — the drawer just links to it.
 
+## Users and email sign-in
+
+Admins add people in Settings → **Users** by email address, as **viewer** (every panel, layout, reports) or
+**admin** (also users, settings, API keys and *Apply fix*). People sign in at `/login`: they enter their address and
+click the one-time link the dashboard emails them (valid 15 minutes, works once). Sessions last 7 days; removing a
+user or changing their role takes effect at once. The administrator password keeps working as the break-glass admin
+login, and is the only way in until email is set up.
+
+To set up email, open Settings → **Email for sign-in links**:
+
+1. **Dashboard public address**: the address people open, e.g. `https://observatory.example.com:8765`. Links point
+   here, never at whatever `Host` a request claims.
+2. **Send email with**:
+   - **SMTP server**: host, port, STARTTLS/TLS/none, username and password. Microsoft 365: `smtp.office365.com`, 587,
+     STARTTLS, with SMTP AUTH enabled for that mailbox. Google Workspace: `smtp.gmail.com`, 587, with an app password,
+     or the SMTP relay service. Amazon SES: the SMTP endpoint and SMTP credentials.
+   - **Microsoft 365 (Graph API)**: no SMTP AUTH needed. In Entra ID create an app registration, add the
+     **Mail.Send** *application* permission for Microsoft Graph and grant admin consent, create a client secret, and
+     enter the tenant ID, client ID and secret. The sender must be a mailbox in the tenant (a shared mailbox is fine).
+     To stop the app sending as any mailbox, limit it with an Exchange application access policy or RBAC for
+     Applications.
+3. **Sender address**, **Save**, then **Send test email**.
+
+`sudo ./install.sh --admin-email you@example.com --public-url https://…` sets the first admin and the address on the
+command line. The server logs every sign-in, link request and user change (`login:` / `users:` / `audit:` lines).
+
 ## Reports
 
 The **Reports** button in the header opens a drawer listing generated reports (newest first) with PDF and HTML
@@ -184,7 +213,8 @@ Tests (OpenSearch stubbed): `pip install -r requirements.txt` once, then `python
 | Install settings | `/etc/utmstack-observatory/config.env` |
 | Dashboard password | `/etc/utmstack-observatory/admin.pass` |
 | Shared dashboard layout | Docker volume `utmstack-observatory-data` (`/data/layout.json`) |
-| Live-edited settings (login, API keys, support, map, AI hosts) | Docker volume `utmstack-observatory-data` (`/data/settings.json`) |
+| Live-edited settings (login, email, API keys, support, map, AI hosts) | Docker volume `utmstack-observatory-data` (`/data/settings.json`) |
+| Users and open sessions (token digests only) | Docker volume `utmstack-observatory-data` (`/data/users.json`) |
 | Generated PDF/HTML reports (last 30 kept) | Docker volume `utmstack-observatory-data` (`/data/reports/`) |
 
 History starts when the dashboard is first installed. On a first run it also backfills event counts from UTMStack's ingest
@@ -199,6 +229,9 @@ The installer sets these; you only need them to run `app/server.py` by hand.
 | `OS_URL` | *(none)* | OpenSearch URL, e.g. `https://node1:9200`. Empty = bare-metal mode using `sudo docker exec` |
 | `OS_USER`, `OS_PASS` / `OS_PASS_FILE` | | OpenSearch credentials (omit if security is off); the installer sets the read-only `observatory_reader` |
 | `DASH_USER`, `DASH_PASS` / `DASH_PASS_FILE` | `admin` | dashboard login. Without a password it only listens on 127.0.0.1 |
+| `ADMIN_EMAIL` | | added as an admin at start-up (never removes or demotes anyone) |
+| `PUBLIC_URL` | | address sign-in links point to (the Settings panel can override it) |
+| `SESSION_DAYS`, `LINK_MINUTES`, `REAUTH_MINUTES` | `7`, `15`, `15` | session length; sign-in link lifetime; how recent a link sign-in must be for sensitive changes |
 | `PORT`, `BIND` | `8765`, `0.0.0.0` | |
 | `TLS_CERT`, `TLS_KEY` | | enable HTTPS |
 | `AI_HOSTS` | *(off)* | `name=ip,name=ip` |

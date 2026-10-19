@@ -11,9 +11,10 @@ NAME_FILE (path to a file, e.g. a Docker secret under /run/secrets).
 import base64, hashlib, hmac, json, os, re, shutil, socket, ssl, subprocess, sys, threading, time
 import urllib.error, urllib.request
 from datetime import datetime, timedelta, timezone
+from html import escape
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-VERSION = "1.21.1"
+VERSION = "1.22.0"
 HERE = os.path.dirname(os.path.abspath(__file__))
 if HERE not in sys.path:                          # the container runs "python3 -I", which leaves this folder off sys.path
     sys.path.insert(0, HERE)
@@ -21,6 +22,8 @@ import layout_store  # noqa: E402  (needs the path above)
 import settings_store  # noqa: E402
 import reports  # noqa: E402
 import geoip  # noqa: E402
+import users_store  # noqa: E402
+import mailer  # noqa: E402
 
 
 def env(name, default=""):
@@ -45,7 +48,8 @@ DASH_USER, DASH_PASS = env("DASH_USER", "admin"), secret("DASH_PASS")        # i
 ABUSEIPDB_KEY = secret("ABUSEIPDB_KEY")        # current_*() below is what every request actually uses --
 VIRUSTOTAL_KEY = secret("VIRUSTOTAL_KEY")      # it prefers whatever was saved live over these
 PORT = int(env("PORT", "8765"))
-BIND = env("BIND") or env("HOST") or ("0.0.0.0" if (DASH_PASS or settings_store.configured(DATA_DIR, "dash_pass")) else "127.0.0.1")
+BIND = env("BIND") or env("HOST") or ("0.0.0.0" if (DASH_PASS or settings_store.configured(DATA_DIR, "dash_pass")
+                                                     or users_store.has_users(DATA_DIR)) else "127.0.0.1")
 TLS_CERT, TLS_KEY = env("TLS_CERT"), env("TLS_KEY")
 DISK_PATH = env("DISK_PATH", "/utmstack" if os.path.isdir("/utmstack") else "/")
 HOST_NAME = env("HOST_NAME") or os.uname().nodename
@@ -102,6 +106,15 @@ def check_password(pw):
             _verified.clear()
         _verified[tag] = (stored, time.time())
     return ok
+
+
+def password_ok(user, pw):
+    """The break-glass login: the installer's (or Settings panel's) username and password."""
+    if not current_dash_pass() or not isinstance(user, str) or not isinstance(pw, str):
+        return False
+    ok_u = hmac.compare_digest(user.encode(), current_dash_user().encode())
+    ok_p = check_password(pw)                   # always run, so a wrong username takes as long as a wrong password
+    return ok_u and ok_p
 
 
 def migrate_plain_password():
@@ -2021,6 +2034,118 @@ def login_attempt(ip, check):
         return False, 0
 
 
+# ---------------------------------------------------------------- users, sessions and email sign-in links
+# Invited users sign in with a one-time link sent by email (users_store, mailer); the installer's username and
+# password stay as the break-glass admin login, through the sign-in page or HTTP Basic (scripts, install.sh).
+PUBLIC_URL = env("PUBLIC_URL").rstrip("/")      # where links point; the Settings panel can override it
+ADMIN_EMAIL = env("ADMIN_EMAIL")                 # install.sh --admin-email: made an admin at start-up
+SESSION_DAYS = float(env("SESSION_DAYS", "7") or "7")
+LINK_MINUTES = int(env("LINK_MINUTES", "15") or "15")
+REAUTH_S = int(env("REAUTH_MINUTES", "15") or "15") * 60
+LINK_PER_IP, LINK_PER_EMAIL, LINK_WINDOW_S = 5, 3, 900
+SESSION_COOKIE = "obs_session"
+_link_reqs = {}                                  # ("ip"|"email", value) -> [request times]
+_cred_tags = {}
+
+
+def login_required():
+    return bool(current_dash_pass()) or users_store.has_users(DATA_DIR)
+
+
+def cred_tag():
+    """Fingerprint of the break-glass password: a session opened with it ends when the password changes. Slow hash,
+    computed once per password, because an installer password is stored in clear text."""
+    stored = current_dash_pass() or ""
+    if stored not in _cred_tags:
+        _cred_tags.clear()
+        _cred_tags[stored] = hashlib.pbkdf2_hmac("sha256", stored.encode(), b"observatory-session", 100_000).hex()[:32]
+    return _cred_tags[stored]
+
+
+def current_public_url():
+    return (settings_store.get(DATA_DIR, "public_url") or PUBLIC_URL).rstrip("/")
+
+
+def mail_config():
+    g = lambda k: settings_store.get(DATA_DIR, k) or ""
+    return {"method": g("mail_method"), "from": g("mail_from"), "smtp_host": g("smtp_host"), "smtp_port": g("smtp_port"),
+            "smtp_security": g("smtp_security"), "smtp_user": g("smtp_user"), "smtp_pass": g("smtp_pass"),
+            "graph_tenant": g("graph_tenant"), "graph_client_id": g("graph_client_id"), "graph_secret": g("graph_secret")}
+
+
+def link_status():
+    """None when sign-in links can be sent, else what is missing. Links never use the request's Host header: an
+    attacker could otherwise have a victim's link point at their own server."""
+    why = mailer.configured(mail_config())
+    if why:
+        return why
+    return None if current_public_url() else "set the dashboard's public address"
+
+
+def link_allowed(ip, email):
+    """At most LINK_PER_IP requests per address and LINK_PER_EMAIL per mailbox in LINK_WINDOW_S."""
+    now = time.time()
+    keys = ((("ip", ip), LINK_PER_IP), (("email", email), LINK_PER_EMAIL))
+    with _logins_lock:
+        if len(_link_reqs) > 10000:
+            _link_reqs.clear()
+        ok = True
+        for key, cap in keys:
+            _link_reqs[key] = [t for t in _link_reqs.get(key, []) if now - t < LINK_WINDOW_S]
+            ok = ok and len(_link_reqs[key]) < cap
+        if ok:
+            for key, _ in keys:
+                _link_reqs[key].append(now)
+    return ok
+
+
+def _mail_page(lines, url, button):
+    paras = "".join('<p style="margin:0 0 14px">%s</p>' % escape(t) for t in lines)
+    return ('<div style="font-family:Segoe UI,Helvetica,Arial,sans-serif;font-size:15px;color:#1b2a3a;max-width:520px">'
+            '<p style="margin:0 0 18px;font-weight:700;font-size:17px">UTMStack Observatory</p>%s'
+            '<p style="margin:22px 0"><a href="%s" style="background:#0b6e8a;color:#fff;padding:11px 20px;border-radius:4px;'
+            'text-decoration:none;font-weight:600">%s</a></p>'
+            '<p style="margin:0;color:#5b6b78;font-size:13px">Or paste this address into your browser:<br>%s</p></div>'
+            % (paras, escape(url), escape(button), escape(url)))
+
+
+def send_sign_in_link(email, ip):
+    """Runs on its own thread, so the request is answered the same way, at the same speed, for any address."""
+    try:
+        if not users_store.get_user(DATA_DIR, email):
+            print("login: sign-in link requested from %s for %s, which is not an invited user" % (ip, email), flush=True)
+            return
+        why = link_status()
+        if why:
+            print("login: cannot email a sign-in link to %s: %s" % (email, why), flush=True)
+            return
+        url = current_public_url() + "/login#t=" + users_store.new_link(email, LINK_MINUTES)
+        lines = ["Someone (hopefully you) asked to sign in to the UTMStack Observatory dashboard as %s." % email,
+                 "This link works once and expires in %d minutes. It was requested from %s." % (LINK_MINUTES, ip),
+                 "If you did not ask for it, ignore this email: nobody can sign in without the link."]
+        mailer.send(mail_config(), email, "Your UTMStack Observatory sign-in link",
+                    "\n\n".join(lines[:2]) + "\n\nSign in: " + url + "\n\n" + lines[2] + "\n",
+                    _mail_page(lines, url, "Sign in"))
+        print("login: sign-in link emailed to %s (requested from %s)" % (email, ip), flush=True)
+    except Exception as e:
+        print("login: sign-in link to %s failed: %s" % (email, str(e)[:300]), flush=True)
+
+
+def send_invite(email, by):
+    try:
+        if link_status():
+            return
+        url = current_public_url() + "/login"
+        lines = ["%s gave you access to the UTMStack Observatory dashboard." % by,
+                 "To sign in, open the dashboard and enter this email address; you will get a one-time sign-in link. "
+                 "There is no password to remember."]
+        mailer.send(mail_config(), email, "You have access to UTMStack Observatory",
+                    "\n\n".join(lines) + "\n\nDashboard: " + url + "\n", _mail_page(lines, url, "Open the dashboard"))
+        print("users: invitation emailed to %s" % email, flush=True)
+    except Exception as e:
+        print("users: invitation to %s failed: %s" % (email, str(e)[:300]), flush=True)
+
+
 _layout_lock = threading.Lock()                  # one writer at a time; version check + save are atomic together
 _settings_lock = threading.Lock()
 
@@ -2034,11 +2159,23 @@ def api_settings():
         home=settings_store.get(DATA_DIR, "home", env("HOME_LOCATION")),
         sites=settings_store.get(DATA_DIR, "sites", env("SITE_LOCATIONS")),
         ai_hosts=settings_store.get(DATA_DIR, "ai_hosts", env("AI_HOSTS")),
+        public_url=current_public_url(),
+        mail_status=link_status() or "",
     )
     return state
 
 
-SENSITIVE_SETTINGS = {"dash_user", "dash_pass", "abuseipdb_key", "virustotal_key", "support"}
+# The mail settings decide where sign-in links go and who sends them, so they need the same confirmation as the login.
+SENSITIVE_SETTINGS = {"dash_user", "dash_pass", "abuseipdb_key", "virustotal_key", "support"} | settings_store.MAIL_KEYS
+HOST_RE = re.compile(r"^(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)*[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?$|^\[[0-9A-Fa-f:.]+\]$")
+
+
+def current_plain_settings():
+    """Today's value of each non-secret sensitive setting, so re-sending an unchanged one needs no confirmation."""
+    same = {k: settings_store.get(DATA_DIR, k) or "" for k in settings_store.MAIL_KEYS - settings_store.SECRET_KEYS}
+    same.update(dash_user=current_dash_user(), support=settings_store.get(DATA_DIR, "support", env("SUPPORT_CONTACT")) or "",
+                public_url=current_public_url())
+    return same
 
 
 def validate_settings_patch(patch):
@@ -2047,6 +2184,33 @@ def validate_settings_patch(patch):
         raise ValueError("the dashboard username cannot be empty")
     if "dash_pass" in patch and len(patch["dash_pass"]) < 12:
         raise ValueError("the dashboard password must be at least 12 characters")
+    if patch.get("public_url"):
+        patch["public_url"] = patch["public_url"].strip().rstrip("/")
+        u = urlparse(patch["public_url"])
+        try:
+            u.port
+            ok = (u.scheme in ("http", "https") and not (u.path or u.params or u.query or u.fragment or u.username)
+                  and bool(u.hostname) and (HOST_RE.match(u.hostname) or ipaddress.ip_address(u.hostname)))
+        except ValueError:
+            ok = False
+        if not ok:
+            raise ValueError("public address must look like https://observatory.example.com:8765 (no path)")
+    if patch.get("mail_method", "") not in ("", "smtp", "graph"):
+        raise ValueError("mail_method must be smtp, graph or empty")
+    if patch.get("smtp_security", "") not in ("", "starttls", "tls", "none"):
+        raise ValueError("smtp_security must be starttls, tls or none")
+    if patch.get("smtp_port") and not (patch["smtp_port"].isdigit() and 0 < int(patch["smtp_port"]) < 65536):
+        raise ValueError("SMTP port must be a number 1-65535")
+    if patch.get("smtp_host") and not HOST_RE.match(patch["smtp_host"]):
+        raise ValueError("SMTP server must be a host name or address")
+    if patch.get("mail_from"):
+        try:
+            patch["mail_from"] = users_store.norm_email(patch["mail_from"])
+        except ValueError:
+            raise ValueError("the sender must be a single email address")
+    for k in ("graph_tenant", "graph_client_id"):
+        if patch.get(k) and not re.match(r"^[A-Za-z0-9.-]{1,100}$", patch[k]):
+            raise ValueError("%s must be a GUID or domain name" % k.replace("_", " "))
     if patch.get("home") and not parse_loc(patch["home"]):
         raise ValueError("home must be 'lat,lon[,city]'")
     if patch.get("sites"):
@@ -2178,59 +2342,279 @@ class Handler(BaseHTTPRequestHandler):
         if not head_only:
             self.wfile.write(body)
 
-    def gate(self):
-        """Authenticate the request with a per-IP lockout. Sends the 401/429 itself; returns True when allowed.
-        Requests without credentials (a browser's first try) do not count as failures."""
-        if not current_dash_pass():
+    # ------------------------------------------------------------ who is asking
+    def cookie_token(self):
+        for part in (self.headers.get("Cookie") or "").split(";"):
+            k, _, v = part.strip().partition("=")
+            if k == SESSION_COOKIE and v:
+                return v
+        return None
+
+    def session_ident(self):
+        tok = self.cookie_token()
+        return users_store.get_session(DATA_DIR, tok, cred_tag()) if tok else None
+
+    def gate(self, admin=False):
+        """Authenticate the request: a session cookie, else Basic credentials (the break-glass admin login) with a
+        per-IP lockout. Sends the 302/401/403/429 itself; returns True when allowed and sets self.ident.
+        Requests without credentials do not count as failures."""
+        self.ident = None
+        if not login_required():
             if host_ok(self.headers.get("Host")):
+                self.ident = {"email": None, "role": "admin", "method": "none", "auth_time": time.time()}
                 return True
             self.send(403, "text/plain", b"This dashboard has no login and only answers to localhost.")
             return False
-        ip = self.client_address[0]
-        has_creds = bool(self.headers.get("Authorization"))
-        if has_creds:
+        ident = self.session_ident()
+        if ident is None and self.headers.get("Authorization"):
+            ip = self.client_address[0]
             ok, wait = login_attempt(ip, self.authorized)
             if wait:
                 self.send(429, "text/plain", b"Too many failed logins from this address. Try again later.",
                           {"Retry-After": str(int(wait) + 1)})
                 return False
             if ok:
-                return True
-            print("login: failed login from %s" % ip, flush=True)
-            time.sleep(3 if login_surge() else 0.5)   # slow down password guessing; much slower during a spread-out attack
-        self.send(401, "text/plain", b"Authentication required",
-                  {"WWW-Authenticate": 'Basic realm="UTMStack Observatory", charset="UTF-8"'})
-        return False
+                ident = {"email": None, "role": "admin", "method": "password", "auth_time": time.time()}
+            else:
+                print("login: failed login from %s" % ip, flush=True)
+                time.sleep(3 if login_surge() else 0.5)   # slow down password guessing; much slower during a spread-out attack
+        if ident is None:
+            # no WWW-Authenticate: a browser's own password prompt would pop up over the sign-in page
+            if urlparse(self.path).path in ("/", "/index.html"):
+                self.send(302, "text/plain", b"sign in at /login", {"Location": "/login"})
+            else:
+                self.send(401, "application/json", b'{"error":"sign in required","login":"/login"}')
+            return False
+        if admin and ident["role"] != "admin":
+            self.send(403, "application/json", b'{"error":"only an admin can do this"}')
+            return False
+        self.ident = ident
+        return True
 
     def authorized(self):
-        if not current_dash_pass():
-            return True
+        """HTTP Basic with the break-glass username and password."""
         h = self.headers.get("Authorization", "")
         if h.startswith("Basic "):
             try:
                 user, _, pw = base64.b64decode(h[6:]).decode().partition(":")
             except Exception:
                 return False
-            ok_u = hmac.compare_digest(user.encode(), current_dash_user().encode())
-            ok_p = check_password(pw)
-            return ok_u and ok_p
+            return password_ok(user, pw)
         return False
+
+    def who(self):
+        return "%s (%s)" % ((self.ident or {}).get("email") or "password login", self.client_address[0])
+
+    def reconfirm(self, cur, need, what):
+        """Sensitive changes: the password again for a password sign-in; for an email-link sign-in, a sign-in from the
+        last REAUTH_S (there is no password to ask for). Sends the refusal itself; returns True when confirmed."""
+        ident = self.ident
+        if ident["method"] == "link":
+            if time.time() - ident["auth_time"] <= REAUTH_S:
+                return True
+            print("audit: %s refused for %s (sign-in older than %d min)" % (what, self.who(), REAUTH_S // 60), flush=True)
+            self.send(403, "application/json", json.dumps(
+                {"error": "for safety this needs a sign-in from the last %d minutes: sign out, then sign in with a new link"
+                 % (REAUTH_S // 60), "reauth": True}).encode())
+            return False
+        if ident["method"] == "none" or not current_dash_pass():
+            return True
+        ok, wait = login_attempt(self.client_address[0], lambda: isinstance(cur, str) and check_password(cur))
+        if ok:
+            return True
+        print("audit: %s refused for %s (wrong current password)" % (what, self.client_address[0]), flush=True)
+        self.send(429 if wait else 403, "application/json", json.dumps(
+            {"error": "too many wrong passwords, try again later" if wait else need}).encode())
+        return False
+
+    def read_json(self, cap):
+        """The request body as a JSON object, CSRF-checked; None after sending the error."""
+        try:
+            n = int(self.headers.get("Content-Length") or 0)
+        except ValueError:
+            n = -1
+        if not 0 <= n <= cap:
+            self.send(400, "application/json", b'{"error":"request too large or missing length"}')
+            self.close_connection = True
+            return None
+        raw = self.rfile.read(n)                   # always consume the body, or a rejected request resets the socket
+        if not layout_store.csrf_ok(self.headers):
+            self.send(403, "application/json", b'{"error":"forbidden"}')
+            return None
+        try:
+            req = json.loads(raw or b"{}")
+        except ValueError:
+            req = None
+        if not isinstance(req, dict):
+            self.send(400, "application/json", b'{"error":"request body must be a JSON object"}')
+            return None
+        return req
+
+    def session_cookie(self, token, max_age):
+        secure = "; Secure" if isinstance(self.connection, ssl.SSLSocket) else ""
+        return "%s=%s; Path=/; HttpOnly; SameSite=Strict; Max-Age=%d%s" % (SESSION_COOKIE, token, max_age, secure)
+
+    def start_session(self, email, method):
+        token = users_store.new_session(DATA_DIR, email, method, SESSION_DAYS, cred_tag() if method == "password" else "")
+        self.send(200, "application/json", b'{"ok":true}',
+                  {"Set-Cookie": self.session_cookie(token, int(SESSION_DAYS * 86400))})
+
+    # ------------------------------------------------------------ sign-in endpoints (no session needed)
+    def auth_post(self, path):
+        ip = self.client_address[0]
+        if path == "/auth/logout":
+            if self.read_json(1024) is None:
+                return
+            tok = self.cookie_token()
+            if tok:
+                users_store.end_session(DATA_DIR, tok)
+            self.send(200, "application/json", b'{"ok":true}', {"Set-Cookie": self.session_cookie("", 0)})
+            return
+        req = self.read_json(2048)
+        if req is None:
+            return
+        if path == "/auth/request":
+            try:
+                email = users_store.norm_email(req.get("email"))
+            except ValueError as e:
+                self.send(400, "application/json", json.dumps({"error": str(e)}).encode())
+                return
+            if link_allowed(ip, email):
+                threading.Thread(target=send_sign_in_link, args=(email, ip), daemon=True).start()
+            else:
+                print("login: sign-in link requests from %s for %s rate-limited" % (ip, email), flush=True)
+            # same answer for invited, unknown and rate-limited addresses: nobody can probe who has access
+            self.send(200, "application/json", json.dumps({"ok": True, "minutes": LINK_MINUTES}).encode())
+        elif path == "/auth/verify":
+            got = []
+            ok, wait = login_attempt(ip, lambda: got.append(users_store.use_link(DATA_DIR, req.get("token"))) or bool(got[0]))
+            if not ok:
+                print("login: %s sign-in link from %s" % ("locked out:" if wait else "invalid or expired", ip), flush=True)
+                self.send(429 if wait else 403, "application/json", json.dumps(
+                    {"error": "too many failed sign-ins from this address, try again later" if wait else
+                     "this link has expired or was already used: ask for a new one"}).encode())
+                return
+            print("login: %s signed in with an email link from %s" % (got[0]["email"], ip), flush=True)
+            self.start_session(got[0]["email"], "link")
+        elif path == "/auth/password":
+            user, pw = req.get("user"), req.get("password")
+            ok, wait = login_attempt(ip, lambda: password_ok(user, pw))
+            if not ok:
+                if not wait:
+                    print("login: failed login from %s" % ip, flush=True)
+                    time.sleep(3 if login_surge() else 0.5)
+                self.send(429 if wait else 403, "application/json", json.dumps(
+                    {"error": "too many failed logins from this address, try again later" if wait else
+                     "wrong username or password"}).encode())
+                return
+            print("login: password (break-glass) sign-in from %s" % ip, flush=True)
+            self.start_session(None, "password")
+        else:
+            self.send(404, "text/plain", b"not found")
+
+    # ------------------------------------------------------------ user management (admins)
+    def api_me(self):
+        i = self.ident
+        return {"email": i["email"], "role": i["role"], "method": i["method"],
+                "name": i["email"] or (current_dash_user() if i["method"] == "password" else "local"),
+                "reauth_minutes": REAUTH_S // 60}
+
+    def api_users(self):
+        return {"users": users_store.list_users(DATA_DIR), "me": self.ident["email"], "link_status": link_status() or "",
+                "public_url": current_public_url()}
+
+    def users_post(self, req):
+        action, email, role = req.get("action"), req.get("email"), req.get("role", "viewer")
+        if action not in ("add", "remove"):
+            self.send(400, "application/json", b'{"error":"action must be add or remove"}')
+            return
+        try:
+            email = users_store.norm_email(email)
+        except ValueError as e:
+            self.send(400, "application/json", json.dumps({"error": str(e)}).encode())
+            return
+        if email == self.ident["email"] and (action == "remove" or role != "admin"):
+            self.send(400, "application/json", b'{"error":"you cannot remove or demote yourself: ask another admin, '
+                      b'or use the installer password"}')
+            return
+        if not self.reconfirm(req.get("current_password", ""), "enter your current password to change users", "user change"):
+            return
+        try:
+            if action == "add":
+                new = users_store.get_user(DATA_DIR, email) is None
+                users_store.set_user(DATA_DIR, email, role, by=self.ident["email"] or "password login")
+                print("audit: user %s %s as %s by %s" % (email, "added" if new else "changed", role, self.who()), flush=True)
+                if new and req.get("invite"):
+                    threading.Thread(target=send_invite, args=(email, self.ident["email"] or "An administrator"),
+                                     daemon=True).start()
+            elif users_store.remove_user(DATA_DIR, email):
+                print("audit: user %s removed by %s" % (email, self.who()), flush=True)
+        except ValueError as e:
+            self.send(400, "application/json", json.dumps({"error": str(e)}).encode())
+            return
+        self.send(200, "application/json", json.dumps(self.api_users()).encode())
+
+    def mail_test(self, req):
+        to = req.get("to") or self.ident["email"]
+        try:
+            to = users_store.norm_email(to)
+        except ValueError:
+            self.send(400, "application/json", b'{"error":"enter the address to send the test email to"}')
+            return
+        if not link_allowed(self.client_address[0], "test:" + to):
+            self.send(429, "application/json", b'{"error":"too many test emails, wait a few minutes"}')
+            return
+        try:
+            mailer.send(mail_config(), to, "UTMStack Observatory test email",
+                        "This test email shows the dashboard can send sign-in links.\n")
+        except RuntimeError as e:
+            print("mail: test email to %s failed: %s" % (to, e), flush=True)
+            self.send(200, "application/json", json.dumps({"ok": False, "error": str(e)[:300]}).encode())
+            return
+        print("mail: test email sent to %s by %s" % (to, self.who()), flush=True)
+        self.send(200, "application/json", json.dumps({"ok": True, "to": to}).encode())
+
+    def cluster_view(self):
+        d = api_cluster()
+        if isinstance(d, dict):
+            d["needs_password"] = self.ident["method"] == "password" and bool(current_dash_pass())
+            if self.ident["role"] != "admin":
+                d["can_fix"], d["viewer"] = False, True
+        return d
 
     def do_GET(self):
         u = urlparse(self.path)
         if u.path == "/healthz":                      # liveness only; no data, no auth
             self.send(200, "text/plain", b"ok")
             return
-        if not self.gate():
+        if u.path == "/login":
+            if login_required() and self.session_ident():
+                self.send(302, "text/plain", b"already signed in", {"Location": "/"})
+                return
+            with open(os.path.join(HERE, "login.html"), "rb") as f:
+                self.send(200, "text/html; charset=utf-8", f.read().replace(b'"/login.js"', b'"/login.js?v=' + VERSION.encode() + b'"'))
+            return
+        if u.path == "/login.js":
+            with open(os.path.join(HERE, "login.js"), "rb") as f:
+                self.send(200, "text/javascript; charset=utf-8", f.read())
+            return
+        if u.path == "/auth/status":                  # what the sign-in page offers; nothing about who has access
+            self.send(200, "application/json", json.dumps(
+                {"link": login_required() and link_status() is None, "password": bool(current_dash_pass()),
+                 "login": login_required()}).encode())
+            return
+        if not self.gate(admin=u.path in ("/api/settings", "/api/users")):
             return
         p = {k: v[0] for k, v in parse_qs(u.query).items()}
         routes = {
+            "/api/me": lambda: self.api_me(),
+            "/api/users": lambda: self.api_users(),
             "/api/sources": lambda: api_sources(),
             "/api/source": lambda: api_source(p.get("name", "")[:200]),
             "/api/alerts": lambda: api_alerts(p),
             "/api/alert": lambda: api_alert(p.get("id", "")),
             "/api/lag": lambda: api_lag(),
-            "/api/cluster": lambda: api_cluster(),
+            "/api/cluster": lambda: self.cluster_view(),
             "/api/storage": lambda: api_storage(),
             "/api/whois": lambda: api_whois(p.get("ip", "")[:64]),
             "/api/reputation": lambda: api_reputation(p.get("ip", "")[:64]),
@@ -2297,7 +2681,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_PUT(self):
         u = urlparse(self.path)
-        if not self.gate():
+        if not self.gate(admin=u.path == "/api/settings"):
             return
         if u.path not in ("/api/layout", "/api/settings"):
             self.send(404, "text/plain", b"not found")
@@ -2326,26 +2710,21 @@ class Handler(BaseHTTPRequestHandler):
                         self.send(409, "application/json", json.dumps({"error": "conflict", "layout": current}).encode())
                         return
                     saved = layout_store.save(DATA_DIR, req.get("layout"))
-                print("audit: shared layout saved by %s" % self.client_address[0], flush=True)
+                print("audit: shared layout saved by %s" % self.who(), flush=True)
                 self.send(200, "application/json", json.dumps({"layout": saved}).encode())
             else:
                 cur = req.pop("current_password", "")
-                same = {"dash_user": current_dash_user(), "support": settings_store.get(DATA_DIR, "support", env("SUPPORT_CONTACT")) or ""}
+                same = current_plain_settings()
                 changed = {k for k in SENSITIVE_SETTINGS & set(req) if k not in same or req[k] != same[k]}
-                if changed and current_dash_pass():
-                    ok, wait = login_attempt(self.client_address[0], lambda: isinstance(cur, str) and check_password(cur))
-                    if not ok:
-                        print("audit: settings change refused for %s (wrong current password)" % self.client_address[0], flush=True)
-                        self.send(429 if wait else 403, "application/json", json.dumps(
-                            {"error": "too many wrong passwords, try again later" if wait else
-                             "enter your current password to change the login, API keys or support contact"}).encode())
-                        return
+                if changed and not self.reconfirm(cur, "enter your current password to change the login, API keys, "
+                                                  "email or support contact", "settings change"):
+                    return
                 with _settings_lock:
                     validate_settings_patch(req)
                     if req.get("dash_pass"):
                         req["dash_pass"] = hash_password(req["dash_pass"])
                     settings_store.save(DATA_DIR, req)
-                print("audit: settings changed by %s: %s" % (self.client_address[0], ", ".join(sorted(req)) or "-"), flush=True)
+                print("audit: settings changed by %s: %s" % (self.who(), ", ".join(sorted(req)) or "-"), flush=True)
                 self.send(200, "application/json", json.dumps(settings_store.public_state(DATA_DIR)).encode())
         except ValueError as e:
             self.send(400, "application/json", json.dumps({"error": str(e)[:200]}).encode())
@@ -2360,21 +2739,24 @@ class Handler(BaseHTTPRequestHandler):
         except ValueError:
             req = {}
         cur = req.get("current_password", "") if isinstance(req, dict) else ""
-        if current_dash_pass():
-            ok, wait = login_attempt(self.client_address[0], lambda: isinstance(cur, str) and check_password(cur))
-            if not ok:
-                print("audit: cluster fix refused for %s (wrong current password)" % self.client_address[0], flush=True)
-                self.send(429 if wait else 403, "application/json", json.dumps(
-                    {"error": "too many wrong passwords, try again later" if wait else "enter your dashboard password to apply the fix"}).encode())
-                return
+        if not self.reconfirm(cur, "enter your dashboard password to apply the fix", "cluster fix"):
+            return
         try:
-            self.send(200, "application/json", json.dumps(apply_cluster_fix(self.client_address[0])).encode())
+            self.send(200, "application/json", json.dumps(apply_cluster_fix(self.who())).encode())
         except Exception as e:
             self.send(500, "application/json", json.dumps(client_error("/api/cluster/fix", e)).encode())
 
     def do_POST(self):
         u = urlparse(self.path)
-        if not self.gate():
+        if u.path.startswith("/auth/"):
+            self.auth_post(u.path)
+            return
+        if not self.gate(admin=u.path in ("/api/cluster/fix", "/api/users", "/api/mail/test")):
+            return
+        if u.path in ("/api/users", "/api/mail/test"):
+            req = self.read_json(4096)
+            if req is not None:
+                (self.users_post if u.path == "/api/users" else self.mail_test)(req)
             return
         if u.path not in ("/api/reports/generate", "/api/cluster/fix"):
             self.send(404, "text/plain", b"not found")
@@ -2520,7 +2902,13 @@ if DEMO:
 if __name__ == "__main__":
     if TRANSPORT == "docker-exec" and not OS_PASS and not DEMO:
         OS_PASS = get_password()
-    if not current_dash_pass() and BIND not in ("127.0.0.1", "localhost", "::1") and env("ALLOW_NO_AUTH") != "1":
+    if ADMIN_EMAIL:
+        try:
+            if users_store.seed_admin(DATA_DIR, ADMIN_EMAIL):
+                print("users: %s added as an admin (ADMIN_EMAIL)" % ADMIN_EMAIL.lower(), flush=True)
+        except ValueError:
+            print("users: ADMIN_EMAIL %r is not a valid email address; ignored" % ADMIN_EMAIL, flush=True)
+    if not login_required() and BIND not in ("127.0.0.1", "localhost", "::1") and env("ALLOW_NO_AUTH") != "1":
         sys.exit("Refusing to listen on %s without a login. Set DASH_PASS (or DASH_PASS_FILE), "
                  "bind to 127.0.0.1, or set ALLOW_NO_AUTH=1." % BIND)
     migrate_plain_password()
@@ -2539,5 +2927,5 @@ if __name__ == "__main__":
         srv.tls_context = tls
         scheme = "https"
     print("UTMStack Observatory %s on %s://%s:%d  (opensearch via %s, login %s, data %s)" % (
-        VERSION, scheme, BIND, PORT, "DEMO DATA" if DEMO else "direct" if TRANSPORT == "http" else "docker-exec", "on" if current_dash_pass() else "OFF", DATA_DIR), flush=True)
+        VERSION, scheme, BIND, PORT, "DEMO DATA" if DEMO else "direct" if TRANSPORT == "http" else "docker-exec", "on" if login_required() else "OFF", DATA_DIR), flush=True)
     srv.serve_forever()

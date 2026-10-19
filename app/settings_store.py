@@ -17,8 +17,11 @@ FILE = "settings.json"
 MAX_VALUE_CHARS = 2000
 MAX_BYTES = 16 * 1024
 CACHE_TTL_S = 2            # load() is on the hot path (every authorized() call); avoid a disk read per request
-KEYS = {"dash_user", "dash_pass", "abuseipdb_key", "virustotal_key", "support", "home", "sites", "ai_hosts", "report_hour"}
-SECRET_KEYS = {"dash_pass", "abuseipdb_key", "virustotal_key"}
+MAIL_KEYS = {"public_url", "mail_method", "mail_from", "smtp_host", "smtp_port", "smtp_security", "smtp_user",
+             "smtp_pass", "graph_tenant", "graph_client_id", "graph_secret"}
+KEYS = {"dash_user", "dash_pass", "abuseipdb_key", "virustotal_key", "support", "home", "sites", "ai_hosts",
+        "report_hour"} | MAIL_KEYS
+SECRET_KEYS = {"dash_pass", "abuseipdb_key", "virustotal_key", "smtp_pass", "graph_secret"}
 
 _cache = {"t": 0.0, "dir": None, "data": {}}
 

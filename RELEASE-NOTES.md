@@ -1,5 +1,32 @@
 # Release notes
 
+## 1.14.2 — 2026-10-18
+
+**For users**
+- An SSH attack logged as several lines within the same second now shows once in the blocked list, even when the
+  lines differ by milliseconds.
+
+## 1.14.1 — 2026-10-18
+
+**For users**
+- SSH attacks reported by Syslog now show port 22 in the blocked list, instead of the attacker's random source
+  port.
+
+## 1.14.0 — 2026-10-18
+
+**For users**
+- New **Any network / VPN / Tor / Hosting** switch on the Live map: show only traffic from known VPN ranges, Tor
+  exit nodes or hosting/datacenter ranges. Works together with the source, direction and allowed/denied switches;
+  the blocked list and top countries follow it too.
+- New **Port** box: type a port (for example 22, 3389 or 443) and press Enter or Show to see only traffic to that
+  port — where it comes from and where it goes. ✕ clears it. Windows and M365 events carry no port, so they drop
+  out while a port is set; Syslog counts its SSH lines as port 22.
+
+**Technical**
+- `/api/geo` takes `port=1..65535` (a `target.port` filter on every query; cache keyed by window, type, port and
+  cleared past 200 entries). VPN/Tor/hosting filtering is client-side over the per-arc counts (a floor for firewall
+  arcs, from each city's 10 busiest addresses).
+
 ## 1.13.0 — 2026-10-18
 
 **For users**

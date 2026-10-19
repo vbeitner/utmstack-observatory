@@ -1,5 +1,17 @@
 # Release notes
 
+## 1.16.1 — 2026-10-19
+
+**For users**
+- Fixed the live map sometimes drawing only in a small box in its top-left corner, with the arcs squeezed into it.
+  The street map now re-measures itself whenever its panel size and its own size disagree.
+- The map credit line moved to the top-right corner, so it no longer covers the zoom-reset button on phones.
+
+**Technical**
+- 1.16.0 creates the street map after fetching its style (to strip attribution HTML), so it can be built before the
+  layout has settled in some browsers. Resize the pending map from the ResizeObserver too, call `resize()` on load,
+  and check canvas vs. container size once a second (`syncBaseSize`).
+
 ## 1.16.0 — 2026-10-19
 
 **For users**

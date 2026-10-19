@@ -285,7 +285,7 @@ details.ev .kvt{margin:4px 0 8px}
 .map-wrap.has-base #mapCanvas{pointer-events:none}
 .map-wrap .maplibregl-ctrl-attrib{font-size:10.5px}
 .netb{display:inline-block;margin-left:5px;padding:0 5px;border:1px solid currentColor;border-radius:3px;font-family:var(--mono);font-size:10.5px;line-height:15px;vertical-align:1px}
-.netb-vpn{color:#FFC857}.netb-tor{color:#C792EA}.netb-hosting{color:#8FB8D0}
+.netb-vpn,.netb-tor{color:#FFD23F}.netb-hosting{color:#8FB8D0}
 .tk-type{color:var(--muted);font-family:var(--mono);font-size:11px;text-transform:capitalize}
 .map-zoom{position:absolute;right:12px;bottom:10px;z-index:3;display:flex;flex-direction:column;gap:4px}
 .map-zoom button{width:34px;height:34px;border:1px solid var(--border-strong);background:rgba(7,10,15,.85);color:var(--ink);font-family:var(--mono);font-size:18px;line-height:1;cursor:pointer}
@@ -476,7 +476,7 @@ body.paused .mark-core,body.paused .tk.new,body.paused .live-dot{animation-play-
           <div id="mapBase"></div>
           <canvas id="mapCanvas" role="img" aria-label="World map of firewall connections: arcs from each firewall to the remote cities it is talking to."></canvas>
           <div class="tt" id="mapTip"></div>
-          <div class="map-legend" aria-hidden="true"><span><i style="background:#35E7FF"></i>Outbound</span><span><i style="background:#68F5B1"></i>Inbound allowed</span><span><i style="background:#FF4D5E"></i>Denied</span><span><i style="background:#EAF7FF;height:6px;width:6px;border-radius:50%"></i>Firewall</span></div>
+          <div class="map-legend" aria-hidden="true"><span><i style="background:#35E7FF"></i>Outbound</span><span><i style="background:#68F5B1"></i>Inbound allowed</span><span><i style="background:#FF4D5E"></i>Denied</span><span><i style="background:#FFD23F"></i>VPN / Tor</span><span><i style="background:#EAF7FF;height:6px;width:6px;border-radius:50%"></i>Firewall</span></div>
           <div class="map-zoom" role="group" aria-label="Map zoom">
             <button id="mapZoomIn" aria-label="Zoom in" title="Zoom in (or scroll / pinch)">+</button>
             <button id="mapZoomOut" aria-label="Zoom out" title="Zoom out">−</button>
@@ -1016,7 +1016,7 @@ body.paused .mark-core,body.paused .tk.new,body.paused .live-dot{animation-play-
   var MAP_TYPE_LABEL = {'all': 'all sources', 'firewall-sophos-xg': 'firewall', 'o365': 'Microsoft 365', 'google': 'Google',
                         'wineventlog': 'Windows', 'linux': 'Linux', 'syslog': 'syslog'};
   var reduceMotion = !!(window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches);
-  var C_OUT = '#35E7FF', C_IN = '#68F5B1', C_DENY = '#FF4D5E', C_PIN = '#FFC857';
+  var C_OUT = '#35E7FF', C_IN = '#68F5B1', C_DENY = '#FF4D5E', C_VPN = '#FFD23F', C_PIN = '#EAF7FF';
   var HOVER_ZOOM = 3.2;
   var hoverPin = null;                             // {lat, lon, label} while a row with coordinates is hovered
   var camX = 0, camY = 0, camZ = 1;                 // eased camera focus (base-projection pixels) and zoom
@@ -1056,7 +1056,8 @@ body.paused .mark-core,body.paused .tk.new,body.paused .live-dot{animation-play-
     landCache = {w:w, h:h, cv:cv};
     return cv;
   }
-  function arcColor(a){ return a.denied*2 >= a.count ? C_DENY : (a.dir==='in' ? C_IN : C_OUT); }
+  function isVpn(x){ return x.vpn > 0 && x.vpn*2 >= x.count; }         // mostly from known VPN ranges or Tor exits
+  function arcColor(a){ return isVpn(a) ? C_VPN : a.denied*2 >= a.count ? C_DENY : (a.dir==='in' ? C_IN : C_OUT); }
   function dirArcs(){
     if(!G) return [];
     var out = [];
@@ -1064,7 +1065,9 @@ body.paused .mark-core,body.paused .tk.new,body.paused .live-dot{animation-play-
       if(mapDir!=='all' && a.dir!==mapDir) return;
       if(mapOut==='all'){ out.push(a); return; }
       var n = mapOut==='denied' ? a.denied : a.count - a.denied;
-      if(n > 0) out.push(Object.assign({}, a, {count:n, denied: mapOut==='denied' ? n : 0}));
+      var k = a.count ? n/a.count : 0;                // VPN/hosting shares scale with the part kept
+      if(n > 0) out.push(Object.assign({}, a, {count:n, denied: mapOut==='denied' ? n : 0,
+                                                vpn: Math.round((a.vpn||0)*k), hosting: Math.round((a.hosting||0)*k)}));
     });
     return out;
   }
@@ -1121,8 +1124,8 @@ body.paused .mark-core,body.paused .tk.new,body.paused .live-dot{animation-play-
     arcs.forEach(function(a, i){
       var s = byId[a.site]; if(!s) return;
       var p0 = s._p, p1 = P(a.lon, a.lat), col = arcColor(a), wgt = Math.log(1+a.count)/Math.log(1+maxC);
-      var key = a.lat+','+a.lon, e = ends[key] || (ends[key] = {p:p1, count:0, denied:0, vpn:0, city:a.city, country:a.country, cc:a.cc, sites:{}});
-      e.count += a.count; e.denied += a.denied; e.vpn += a.vpn||0; e.sites[s.name] = (e.sites[s.name]||0) + a.count;
+      var key = a.lat+','+a.lon, e = ends[key] || (ends[key] = {p:p1, count:0, denied:0, vpn:0, hosting:0, city:a.city, country:a.country, cc:a.cc, sites:{}});
+      e.count += a.count; e.denied += a.denied; e.vpn += a.vpn||0; e.hosting += a.hosting||0; e.sites[s.name] = (e.sites[s.name]||0) + a.count;
       var dx = p1[0]-p0[0], dy = p1[1]-p0[1];
       if(dx*dx+dy*dy < 9) return;                        // same metro area: endpoint dot only
       var c = ctrl(p0, p1);
@@ -1139,7 +1142,7 @@ body.paused .mark-core,body.paused .tk.new,body.paused .live-dot{animation-play-
       }
     });
     Object.keys(ends).forEach(function(k){                // remote endpoints
-      var e = ends[k], col = e.denied*2 >= e.count ? C_DENY : C_OUT, r = (1.6 + 3.2*Math.log(1+e.count)/Math.log(1+maxC))/camZ;
+      var e = ends[k], col = isVpn(e) ? C_VPN : e.denied*2 >= e.count ? C_DENY : C_OUT, r = (1.6 + 3.2*Math.log(1+e.count)/Math.log(1+maxC))/camZ;
       if(e.denied && !reduceMotion){
         var pulse = (t*.9 + (e.p[0]%7)/7) % 1;
         ctx.beginPath(); ctx.arc(e.p[0], e.p[1], r + pulse*14/camZ, 0, Math.PI*2);
@@ -1261,7 +1264,8 @@ body.paused .mark-core,body.paused .tk.new,body.paused .live-dot{animation-play-
       var e = best.e, top = Object.keys(e.sites).sort(function(a,b){ return e.sites[b]-e.sites[a]; }).slice(0,3);
       html = '<b style="color:#EAF7FF">'+flag(e.cc)+' '+esc([e.city, e.country].filter(Boolean).join(', '))+'</b><br>'+nf0.format(e.count)+' connections · '+
         '<span style="color:'+(e.denied?'#FF8A95':'inherit')+'">'+nf0.format(e.denied)+' blocked</span>'+
-        (e.vpn ? '<br><span style="color:#FFC857">'+nf0.format(e.vpn)+' from VPN / hosting / Tor addresses</span>' : '')+'<br>via '+top.map(esc).join(', ');
+        (e.vpn ? '<br><span style="color:'+C_VPN+'">'+nf0.format(e.vpn)+' from VPN / Tor addresses</span>' : '')+
+        (e.hosting ? '<br><span style="color:#8FB8D0">'+nf0.format(e.hosting)+' from hosting / datacenter addresses</span>' : '')+'<br>via '+top.map(esc).join(', ');
     }
     mapTip.innerHTML = html; mapTip.classList.add('on');
     var tw = mapTip.offsetWidth, th = mapTip.offsetHeight;

@@ -1,5 +1,21 @@
 # Release notes
 
+## 1.11.0 — 2026-10-18
+
+**For users**
+- Traffic that comes mostly from **known VPN ranges or Tor exit nodes** is now drawn in **yellow** on the map (arcs
+  and city dots), with a "VPN / Tor" entry in the legend. This now covers firewall traffic too, not only Syslog,
+  Linux and Windows attackers.
+- City tooltips list VPN/Tor and hosting/datacenter connections separately. "Hosting" (datacenter ranges, where
+  VPS servers and many VPNs live) keeps its normal color, because most internet attack traffic comes from such
+  ranges; it's shown as a badge and in the tooltip.
+- The marker that appears when you hover a blocked row is now white, so it can't be mistaken for VPN traffic.
+
+**Technical**
+- Inbound city buckets add a top-10 `origin.ip` terms agg; `net_counts()` classifies those IPs locally into `vpn`
+  (VPN + Tor) and `hosting` per arc. An arc/dot is yellow when VPN/Tor make up at least half its connections.
+  Counts come from each city's 10 busiest addresses, so they are a floor, not exact.
+
 ## 1.10.2 — 2026-10-18
 
 **For users**

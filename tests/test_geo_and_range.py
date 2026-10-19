@@ -157,13 +157,19 @@ class GeoMap(unittest.TestCase):
                                                         "cc": "GB", "net": None}}.get(ip)
         g = self.s.build_geo(60, "syslog")
         ams = next(a for a in g["arcs"] if a["city"] == "Amsterdam")
-        self.assertEqual((ams["count"], ams["denied"], ams["vpn"], ams["dir"], ams["site"]), (2, 2, 2, "in", "10.0.2.3"))
+        self.assertEqual((ams["count"], ams["denied"], ams["hosting"], ams["vpn"], ams["dir"], ams["site"]), (2, 2, 2, 0, "in", "10.0.2.3"))
         lon = next(a for a in g["arcs"] if a["city"] == "London")
         self.assertEqual(lon["denied"], 0)                                      # a successful login is not blocked
         self.assertEqual((g["total"], g["denied"]), (3, 2))
         self.assertEqual([x["ip"] for x in g["ticker"]], ["2.57.122.238", "2.57.122.238"])   # different seconds: both kept
         self.assertEqual(g["ticker"][0]["net"], "hosting")
         self.assertEqual(next(x for x in g["sites"] if x["id"] == "10.0.2.3")["name"], "truenas")
+
+    def test_firewall_arcs_count_vpn_tor_and_hosting_from_their_busiest_ips(self):
+        kinds = {"1.1.1.1": "vpn", "2.2.2.2": "tor", "3.3.3.3": "hosting"}
+        self.s.GEO.net_kind = lambda ip: kinds.get(ip)
+        b = [{"key": ip, "doc_count": n} for ip, n in (("1.1.1.1", 5), ("2.2.2.2", 3), ("3.3.3.3", 7), ("4.4.4.4", 9))]
+        self.assertEqual(self.s.net_counts(b), (8, 7))
 
     def test_same_attempt_logged_twice_shows_once(self):
         hits = [{"_source": {"@timestamp": "2026-10-18T20:00:00Z", "dataSource": "10.0.2.3", "log": {"message": m}}}

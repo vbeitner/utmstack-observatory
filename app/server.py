@@ -14,7 +14,7 @@ from datetime import datetime, timedelta, timezone
 from html import escape
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-VERSION = "1.22.0"
+VERSION = "1.23.0"
 HERE = os.path.dirname(os.path.abspath(__file__))
 if HERE not in sys.path:                          # the container runs "python3 -I", which leaves this folder off sys.path
     sys.path.insert(0, HERE)
@@ -248,7 +248,65 @@ def _sums():
     return {"sent": {"sum": _bytes_script("bytes_sent")}, "recv": {"sum": _bytes_script("bytes_received")}}
 
 
-def ai_traffic():
+# ---------------------------------------------------------------- source filter
+# The viewer can narrow the dashboard to one or more data sources (UTMStack's dataSource: a firewall's address, a
+# server's hostname, an M365 tenant...). Empty means every source, as before. Values are passed to OpenSearch as
+# exact terms on dataSource.keyword, never pasted into a query string.
+MAX_SOURCES = 25
+MAX_SOURCE_LEN = 200
+
+
+def parse_sources(values):
+    """Query-string values (?src=a&src=b) -> a sorted tuple of distinct, sane source names; () means all sources."""
+    out = set()
+    for v in values or ():
+        v = str(v).strip()
+        if v and len(v) <= MAX_SOURCE_LEN and v.isprintable():
+            out.add(v)
+    return tuple(sorted(out)[:MAX_SOURCES])
+
+
+def src_filter(sources):
+    """[] or [the OpenSearch filter clause keeping only these sources], for appending to a bool filter list."""
+    return [{"terms": {"dataSource.keyword": list(sources)}}] if sources else []
+
+
+def scoped(query, sources):
+    """A query narrowed to the selected sources (unchanged when none are selected)."""
+    if not sources:
+        return query
+    return {"bool": {"filter": [query] + src_filter(sources)}}
+
+
+SOURCE_LIST_TTL_S = 60
+_source_list = {"t": 0, "list": None}
+_source_list_lock = threading.Lock()
+
+
+def api_source_list():
+    """Every data source that sent logs in the last 24 h, for the source picker: id (the exact dataSource value to
+    filter on), a readable name (a firewall's device name where known), its data type, events and last-seen time."""
+    with _source_list_lock:
+        if _source_list["list"] is not None and time.time() - _source_list["t"] < SOURCE_LIST_TTL_S:
+            return {"sources": _source_list["list"]}
+        r = os_call("/v11-log-*/_search" + IX, {"size": 0, "query": rng("now-24h"), "aggs": {
+            "ds": {"terms": {"field": "dataSource.keyword", "size": 500}, "aggs": {
+                "types": {"terms": {"field": "dataType.keyword", "size": 1}},
+                "dn": {"terms": {"field": "log.deviceName.keyword", "size": 1}},
+                "last": {"max": {"field": "@timestamp"}}}}}})
+        out = []
+        for b in (r.get("aggregations") or {}).get("ds", {}).get("buckets", []):
+            sid = b["key"]
+            name = _q(b["dn"]["buckets"][0]["key"]) if b["dn"]["buckets"] else _q(sid)
+            out.append({"id": sid, "name": name or sid,
+                        "type": b["types"]["buckets"][0]["key"] if b["types"]["buckets"] else "",
+                        "events": b["doc_count"], "last": b["last"].get("value")})
+        out.sort(key=lambda x: (x["type"], x["name"].lower()))
+        _source_list.update(t=time.time(), list=out)
+        return {"sources": out}
+
+
+def ai_traffic(sources=()):
     ai_hosts = current_ai_hosts()
     if not ai_hosts:
         return {"configured": False}
@@ -271,7 +329,7 @@ def ai_traffic():
 
     res = os_call("/v11-log-firewall-sophos-xg-*/_search", {
         "size": 0, "track_total_hits": True,
-        "query": {"bool": {"filter": [ranged], "should": [
+        "query": {"bool": {"filter": [ranged] + src_filter(sources), "should": [
             {"terms": {"log.dst_ip.keyword": quoted}}, {"terms": {"log.src_ip.keyword": quoted}}],
             "minimum_should_match": 1}},
         "aggs": {"to_ai": side("dst_ip", "src_ip", "src_country"), "from_ai": side("src_ip", "dst_ip", "dst_country")}})
@@ -334,10 +392,12 @@ def ai_traffic():
 RANGES_H = (1, 6, 24)                           # selectable dashboard windows; 24 h is the live default
 
 
-def collect(hours=24):
+def collect(hours=24, sources=()):
+    """Dashboard data for the last `hours`; with `sources`, every log and alert figure counts only those sources
+    (cluster health and host resources are about the SIEM itself and stay unfiltered)."""
     span = "now-%dh" % hours
     logs = os_call("/v11-log-*/_search", {
-        "size": 0, "track_total_hits": True, "query": rng(span),
+        "size": 0, "track_total_hits": True, "query": scoped(rng(span), sources),
         "aggs": {
             "types": {"terms": {"field": "dataType.keyword", "size": 8}},
             "ds": {"terms": {"field": "dataSource.keyword", "size": 200},
@@ -346,9 +406,9 @@ def collect(hours=24):
             "recent": minute_hist(),
             "latest": {"max": {"field": "@timestamp"}},
         }})
-    prev = os_call("/v11-log-*/_count", {"query": rng("now-%dh" % (2 * hours), span)})
+    prev = os_call("/v11-log-*/_count", {"query": scoped(rng("now-%dh" % (2 * hours), span), sources)})
     alerts = os_call("/v11-alert-*/_search", {
-        "size": 14, "track_total_hits": True, "query": rng(span), "sort": [{"@timestamp": "desc"}],
+        "size": 14, "track_total_hits": True, "query": scoped(rng(span), sources), "sort": [{"@timestamp": "desc"}],
         "_source": ["@timestamp", "name", "severityLabel", "dataSource", "dataType", "statusLabel",
                     "description", "events", "target", "adversary", "technique"],
         "aggs": {
@@ -359,7 +419,7 @@ def collect(hours=24):
         }})
     health = os_call("/_cluster/health", method="GET")
     try:
-        ai = ai_traffic()
+        ai = ai_traffic(sources)
     except Exception as e:  # AI panel is optional; never take down the rest of the dashboard
         ai = {"error": str(e)[:200]}
 
@@ -373,7 +433,7 @@ def collect(hours=24):
     keys = keys[-60:]
     minutes = [{"t": k, "events": ev_min.get(k, 0), "alerts": al_min.get(k, 0)} for k in keys]
 
-    if hours == 24:                              # the source list behind the drill-downs is always 24 h
+    if hours == 24 and not sources:              # the source list behind the drill-downs is always 24 h, all sources
         _state["ds"] = [{"name": b["key"], "docs": b["doc_count"], "last": b["last"].get("value") or 0,
                          "type": (b["types"]["buckets"][0]["key"] if b["types"]["buckets"] else "")}
                         for b in logs["aggregations"]["ds"]["buckets"]]
@@ -403,6 +463,7 @@ def collect(hours=24):
     return {
         "now": datetime.now(timezone.utc).isoformat(),
         "range_h": hours,
+        "sources": list(sources),
         "minutes": minutes,
         "kpi": {
             "sources_online": len(online), "sources_total": len(ds), "sources_stale": stale[:6],
@@ -1435,17 +1496,17 @@ def geo_scope(dtype):
     return "/v11-log-*/_search", {"terms": {"dataType.keyword": list(NET_TYPES)}}
 
 
-def empty_geo(window, dtype, port=None):
-    return {"window_s": window, "type": dtype, "port": port, "generated": datetime.now(timezone.utc).isoformat(), "age_s": None,
+def empty_geo(window, dtype, port=None, sources=()):
+    return {"window_s": window, "type": dtype, "port": port, "sources": list(sources), "generated": datetime.now(timezone.utc).isoformat(), "age_s": None,
             "total": 0, "denied": 0, "failed": 0, "per_min": 0, "home": current_home(), "sites": [], "arcs": [],
             "arcs_total": 0, "countries": {}, "ticker": [], "_newest": None}
 
 
-def build_geo(window, dtype="all", port=None):
-    g = build_net_geo(window, dtype, port) if dtype == "all" or dtype in NET_TYPES else empty_geo(window, dtype, port)
+def build_geo(window, dtype="all", port=None, sources=()):
+    g = build_net_geo(window, dtype, port, sources) if dtype == "all" or dtype in NET_TYPES else empty_geo(window, dtype, port, sources)
     for t in ATTACK_TYPES if dtype == "all" else ([dtype] if dtype in ATTACK_TYPES else []):
         try:
-            add_attackers(g, window, t, port)
+            add_attackers(g, window, t, port, sources)
         except Exception as e:                   # one source failing must not blank the map
             print("attacker geo (%s) failed: %s" % (t, str(e)[:200]), flush=True)
     for x in g["ticker"]:
@@ -1467,9 +1528,10 @@ def build_geo(window, dtype="all", port=None):
     return g
 
 
-def build_net_geo(window, dtype, port=None):
+def build_net_geo(window, dtype, port=None, sources=()):
     search, type_flt = geo_scope(dtype)
-    span = {"bool": {"filter": [rng("now-%ds" % window), type_flt] + ([{"term": {"target.port": port}}] if port else [])}}
+    span = {"bool": {"filter": [rng("now-%ds" % window), type_flt] + ([{"term": {"target.port": port}}] if port else [])
+                     + src_filter(sources)}}
     has = lambda f: {"exists": {"field": f}}
     # firewalls only "deny"; for sign-in logs (M365, Google) a failed login is the blocked event
     blocked = ["denied"] if dtype == "firewall-sophos-xg" else ["denied", "failed"]
@@ -1490,15 +1552,20 @@ def build_net_geo(window, dtype, port=None):
                     "origin.geolocation.countryCode", "origin.geolocation.latitude", "origin.geolocation.longitude",
                     "target.port", "protocol", "dataSource", "dataType"]})
     if "aggregations" not in r:                  # no index for this type yet (e.g. Google not connected): empty map
-        return empty_geo(window, dtype, port)
+        return empty_geo(window, dtype, port, sources)
     a = r["aggregations"]
     total = r["hits"]["total"]["value"]
     denied, failed = _outcomes(a["outcome"]["buckets"])
 
     sites = [dict(x) for x in fw_sites()] if dtype in ("all", "firewall-sophos-xg") else []
+    keep = {_q(x) for x in sources}
+    if sources:                                  # only the selected firewalls get a pin
+        sites = [x for x in sites if x["id"] in keep]
     by_id = {x["id"]: x for x in sites}
     for b in a["per_fw"]["buckets"]:
         ip = _q(b["key"])
+        if sources and ip not in keep:
+            continue
         if ip not in by_id:                      # firewall seen for the first time since the site list was cached
             home = current_home()
             by_id[ip] = {"id": ip, "name": ip, "lat": home["lat"], "lon": home["lon"], "city": home.get("city"), "loc_source": "home"}
@@ -1538,7 +1605,7 @@ def build_net_geo(window, dtype, port=None):
                        "proto": s_.get("protocol"), "site": _q(s_.get("dataSource")), "type": s_.get("dataType"),
                        "lat": round(lat, 3) if lat is not None else None, "lon": round(lon, 3) if lon is not None else None})
 
-    out = empty_geo(window, dtype, port)
+    out = empty_geo(window, dtype, port, sources)
     out.update(total=total, denied=denied, failed=failed, sites=sites, arcs=arcs, countries=countries, ticker=ticker,
                _newest=a["newest"].get("value"))
     return out
@@ -1559,7 +1626,7 @@ def syslog_ip(message):
     return None
 
 
-def attacker_rows(window, dtype, port=None):
+def attacker_rows(window, dtype, port=None, sources=()):
     """-> (rows [{site, name, ip, count, blocked}], ticker candidates, newest ms) for one log type."""
     span = rng("now-%ds" % window)
     path = "/v11-log-%s*/_search" % dtype + IX
@@ -1569,7 +1636,7 @@ def attacker_rows(window, dtype, port=None):
             return [], [], None
         r = os_call(path, {"size": 1000, "sort": [{"@timestamp": "desc"}],
                            "_source": ["@timestamp", "log.message", "dataSource", "origin.host", "origin.process"],
-                           "query": {"bool": {"filter": [span, {"term": {"dataType.keyword": "syslog"}}],
+                           "query": {"bool": {"filter": [span, {"term": {"dataType.keyword": "syslog"}}] + src_filter(sources),
                                               "should": [{"match_phrase": {"log.message": p}} for p in SYSLOG_PHRASES],
                                               "minimum_should_match": 1}}})
         for h in r.get("hits", {}).get("hits", []):
@@ -1593,7 +1660,7 @@ def attacker_rows(window, dtype, port=None):
         return list(rows.values()), ticker, newest
 
     flt = [span, {"term": {"dataType.keyword": dtype}}, {"exists": {"field": "origin.ip"}}] + \
-        ([{"term": {"target.port": port}}] if port else [])
+        ([{"term": {"target.port": port}}] if port else []) + src_filter(sources)
     q = {"bool": {"filter": flt}}
     if dtype == "o365":                          # the ones UTMStack already placed are on the map via build_net_geo
         q["bool"]["must_not"] = [{"exists": {"field": "origin.geolocation.latitude"}}]
@@ -1626,8 +1693,8 @@ def attacker_rows(window, dtype, port=None):
     return list(rows.values()), ticker, a["newest"].get("value")
 
 
-def add_attackers(g, window, dtype, port=None):
-    rows, ticker, newest = attacker_rows(window, dtype, port)
+def add_attackers(g, window, dtype, port=None, sources=()):
+    rows, ticker, newest = attacker_rows(window, dtype, port, sources)
     if newest and (not g["_newest"] or newest > g["_newest"]):
         g["_newest"] = newest
     by_id = {x["id"]: x for x in g["sites"]}
@@ -1684,17 +1751,18 @@ def anonymize(geo):
     return out
 
 
-def api_geo(window=60, anon=False, dtype="all", port=None):
+def api_geo(window=60, anon=False, dtype="all", port=None, sources=()):
     window = window if window in GEO_WINDOWS_S else 60
     dtype = dtype if dtype in GEO_TYPES else "all"
     port = port if isinstance(port, int) and 1 <= port <= 65535 else None
+    key = (window, dtype, port, sources)
     with _geo_lock:
-        if len(_geo_cache) > 200:                # many different ports tried: drop the old answers
+        if len(_geo_cache) > 200:                # many different ports or source selections tried: drop the old answers
             _geo_cache.clear()
-        hit = _geo_cache.get((window, dtype, port))
+        hit = _geo_cache.get(key)
         if not hit or time.time() - hit[0] >= GEO_TTL_S:
-            hit = (time.time(), build_geo(window, dtype, port))
-            _geo_cache[(window, dtype, port)] = hit
+            hit = (time.time(), build_geo(window, dtype, port, sources))
+            _geo_cache[key] = hit
     data = hit[1]                                # shared cache: never modify it in place
     if anon:
         return anonymize(data)
@@ -1939,22 +2007,26 @@ _range_cache = {}
 _range_lock = threading.Lock()
 
 
-def data_for(hours):
-    """Dashboard data for a window. 24 h comes from the background refresher; 1 h / 6 h are built on
-    request and shared for REFRESH_S seconds, so extra viewers do not multiply OpenSearch load."""
-    if hours == 24:
+def data_for(hours, sources=()):
+    """Dashboard data for a window. 24 h for all sources comes from the background refresher; other windows and
+    any source selection are built on request and shared for REFRESH_S seconds, so extra viewers do not multiply
+    OpenSearch load."""
+    if hours == 24 and not sources:
         with _lock:
             return dict(_state["data"])
+    key = (hours, sources)
     with _range_lock:
-        hit = _range_cache.get(hours)
+        if len(_range_cache) > 100:              # many different source selections: drop the old answers
+            _range_cache.clear()
+        hit = _range_cache.get(key)
         if hit and time.time() - hit[0] < REFRESH_S:
             return dict(hit[1])
         try:
-            data = collect(hours)
+            data = collect(hours, sources)
         except Exception as e:
-            data = dict(hit[1]) if hit else {}
+            data = dict(hit[1]) if hit else {"sources": list(sources)}
             data["error"] = str(e)
-        _range_cache[hours] = (time.time(), data)
+        _range_cache[key] = (time.time(), data)
         return dict(data)
 
 
@@ -2605,11 +2677,14 @@ class Handler(BaseHTTPRequestHandler):
             return
         if not self.gate(admin=u.path in ("/api/settings", "/api/users")):
             return
-        p = {k: v[0] for k, v in parse_qs(u.query).items()}
+        qs = parse_qs(u.query)
+        p = {k: v[0] for k, v in qs.items()}
+        sources = parse_sources(qs.get("src"))
         routes = {
             "/api/me": lambda: self.api_me(),
             "/api/users": lambda: self.api_users(),
             "/api/sources": lambda: api_sources(),
+            "/api/source-list": lambda: api_source_list(),
             "/api/source": lambda: api_source(p.get("name", "")[:200]),
             "/api/alerts": lambda: api_alerts(p),
             "/api/alert": lambda: api_alert(p.get("id", "")),
@@ -2624,14 +2699,14 @@ class Handler(BaseHTTPRequestHandler):
             "/api/reports": lambda: {"reports": reports.list_reports(DATA_DIR), "report_hour": current_report_hour()},
             "/api/geo": lambda: api_geo(int(p["window"]) if p.get("window", "").isdigit() else 60,
                                         p.get("anon") == "1", p.get("type", "all"),
-                                        int(p["port"]) if p.get("port", "").isdigit() else None),
+                                        int(p["port"]) if p.get("port", "").isdigit() else None, sources),
         }
         if u.path == "/api/data":
             try:
                 hours = int(p.get("range", "24"))
             except ValueError:
                 hours = 24
-            data = data_for(hours if hours in RANGES_H else 24)
+            data = data_for(hours if hours in RANGES_H else 24, sources)
             data["lag"] = lag_summary()
             self.send(200, "application/json", json.dumps(data).encode())
         elif u.path == "/api/history":

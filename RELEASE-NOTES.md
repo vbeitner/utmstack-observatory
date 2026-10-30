@@ -1,5 +1,27 @@
 # Release notes
 
+## 1.23.0 — 2026-10-29
+
+**For users**
+- **Source filter.** A new **All sources** button in the header lets you show only one data source — a firewall, a
+  server, a Microsoft 365 tenant — or several at once. The counters, event trend, donut, alert rules, latest alerts,
+  AI traffic and the live map then count only those sources. Tick nothing to see everything, as before.
+- While a filter is on, a **Showing only** bar under the header names each selected source, so it is always clear what
+  you are looking at. Remove one with ×, or press **Show all sources**. Your choice is remembered in this browser
+  after a refresh. Wall mode shows only how many sources are selected, never their names.
+- Trends · 30 d, reports and the drill-down views still cover every source.
+- On phones and narrow windows the header buttons now wrap onto a second line instead of running off the screen.
+
+**Technical**
+- New `GET /api/source-list` (dataSource values from the last 24 h with device name, data type, event count and last
+  seen; cached 60 s). `/api/data` and `/api/geo` accept repeated `src=` parameters (trimmed, deduplicated, at most 25,
+  200 characters each), applied as a `terms` filter on `dataSource.keyword` to the log, previous-window, alert and
+  AI-traffic queries and to every map query (firewall/M365 aggregation and ticker, syslog/Linux/Windows/M365 attacker
+  queries). Map pins are limited to the selected firewalls. Answers carry `sources` so the page drops stale ones.
+- Filtered dashboard data is built on request and cached per (range, selection) for `REFRESH_S`; the background
+  24 h refresher and the drill-down source list stay unfiltered. Demo mode supports the filter.
+- Tests: `tests/test_source_filter.py`.
+
 ## 1.22.0 — 2026-10-19
 
 **For users**

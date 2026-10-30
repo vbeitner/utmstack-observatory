@@ -67,6 +67,26 @@ button{font-family:inherit;color:inherit;background:none;border:0;cursor:pointer
 .ctl:hover{border-color:var(--border-strong);color:var(--ink);background:var(--s2)}
 .ctl[aria-pressed="true"]{border-color:var(--cyan);color:var(--cyan);background:var(--cyan-soft)}
 .ctl.icon{padding:0;justify-content:center;width:36px}
+/* ---------- source filter ---------- */
+#srcBtn{max-width:240px}
+#srcBtn .t{overflow:hidden;text-overflow:ellipsis}
+.src-strip{display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:8px 12px;border:1px solid var(--cyan);border-radius:4px;background:var(--cyan-soft);font-family:var(--mono);font-size:12.5px;font-weight:600;color:var(--ink)}
+.src-strip[hidden]{display:none}
+.src-strip .k{color:var(--cyan);letter-spacing:.08em}
+.src-chip{display:inline-flex;align-items:center;gap:6px;height:26px;padding:0 4px 0 9px;border:1px solid var(--border-strong);border-radius:13px;background:var(--s1);color:var(--ink);max-width:260px}
+.src-chip span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.src-chip button{width:20px;height:20px;border-radius:50%;color:var(--muted);line-height:1}
+.src-chip button:hover{color:var(--ink);background:var(--s3)}
+.src-strip .note{color:var(--muted);font-weight:500;flex:1 1 220px}
+.src-search{height:34px;width:100%;background:var(--canvas);color:var(--ink);border:1px solid var(--border-strong);border-radius:4px;padding:0 10px;font:13px var(--ui)}
+.src-group h3{font-family:var(--mono);font-size:11.5px;letter-spacing:.1em;color:var(--muted);margin:0 0 6px;font-weight:600}
+.src-row{display:grid;grid-template-columns:auto minmax(0,1fr) auto;align-items:center;gap:10px;padding:7px 8px;border-radius:4px;cursor:pointer;font-family:var(--mono);font-size:12.5px;color:var(--ink2)}
+.src-row:hover{background:var(--s2)}
+.src-row input{accent-color:var(--cyan);width:15px;height:15px}
+.src-row .n{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.src-row .c{color:var(--muted)}
+.src-row.on{color:var(--ink)}
+body.wall .src-chip button,body.wall .src-strip .note{display:none}
 .kpi-band{display:grid;grid-template-columns:repeat(4,1fr);background:var(--s1);border:1px solid var(--border)}
 .kpi{position:relative;padding:18px 22px 20px;display:flex;flex-direction:column;justify-content:space-between;min-width:0;overflow:hidden}
 .kpi+.kpi{border-left:1px solid var(--border)}
@@ -270,6 +290,7 @@ details.ev .kvt{margin:4px 0 8px}
   .shell{padding:16px}
   .hdr{grid-template-columns:1fr;gap:12px}
   .hdr-truth,.hdr-ctrl{justify-content:flex-start}
+  .hdr-ctrl{flex-wrap:wrap}
   .kpi-band{grid-template-columns:repeat(2,1fr)}
   .kpi:nth-child(3){border-left:0}
   .kpi:nth-child(n+3){border-top:1px solid var(--border)}
@@ -424,6 +445,8 @@ body.paused .mark-core,body.paused .tk.new,body.paused .live-dot{animation-play-
       <div class="seg" id="rangeSeg" role="group" aria-label="Time range for the counters, donut, rules and alert list">
         <button data-r="1" aria-pressed="false">1 h</button><button data-r="6" aria-pressed="false">6 h</button><button data-r="24" aria-pressed="true">24 h</button>
       </div>
+      <button class="ctl" id="srcBtn" aria-pressed="false" aria-haspopup="dialog" title="Show only some data sources (firewalls, servers, tenants)">
+        <svg width="13" height="13" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.3" aria-hidden="true"><path d="M1.5 2.5h11L8.5 7.5v4l-3 1.5V7.5Z"/></svg><span class="t" id="srcBtnText">All sources</span></button>
       <button class="ctl" id="wallBtn" aria-pressed="false" title="Wall display: full screen, client names hidden, views rotate every 30 s (Esc exits)">Wall</button>
       <button class="ctl" id="trendsBtn" title="30-day history with daily and weekly comparisons">
         <svg width="13" height="13" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.3" aria-hidden="true"><path d="M1.5 12.5h11M3 10V6.5M6 10V3.5M9 10V7.5M12 10V5"/></svg>Trends · 30 d</button>
@@ -433,6 +456,11 @@ body.paused .mark-core,body.paused .tk.new,body.paused .live-dot{animation-play-
       <button class="ctl icon" id="fsBtn" title="Fullscreen" aria-label="Toggle fullscreen"><svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.3" aria-hidden="true"><path d="M1.5 5V1.5H5M9 1.5h3.5V5M12.5 9v3.5H9M5 12.5H1.5V9"/></svg></button>
     </div>
   </header>
+  <div class="src-strip" id="srcStrip" role="status" hidden>
+    <span class="k">SHOWING ONLY</span><span id="srcChips"></span>
+    <span class="note">Counters, trend, rate, donut, alert rules, latest alerts, AI traffic and the map. Trends · 30 d, reports and drill-downs still cover every source.</span>
+    <button class="txt-btn" id="srcClear">Show all sources</button>
+  </div>
   <nav class="tabbar" id="tabbar" aria-label="Screens">
     <div class="tabs" id="screenTabs" role="tablist"></div>
     <span class="spacer"></span>
@@ -640,6 +668,19 @@ body.paused .mark-core,body.paused .tk.new,body.paused .live-dot{animation-play-
     <button class="ctl icon" id="closeDig" aria-label="Close"><svg width="13" height="13" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.3" aria-hidden="true"><path d="M2 2l10 10M12 2L2 12"/></svg></button>
   </div>
   <div class="drawer-body" id="digBody"></div>
+</aside>
+
+<aside class="drawer" id="srcDrawer" role="dialog" aria-modal="true" aria-labelledby="srcTitle" aria-hidden="true">
+  <div class="drawer-head">
+    <div><h2 id="srcTitle">Data sources</h2><div class="panel-meta" id="srcMeta">Tick one or more; none ticked shows every source</div></div>
+    <span class="spacer"></span>
+    <button class="txt-btn" id="srcAll">Show all sources</button>
+    <button class="ctl icon" id="closeSrc" aria-label="Close data sources"><svg width="13" height="13" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.3" aria-hidden="true"><path d="M2 2l10 10M12 2L2 12"/></svg></button>
+  </div>
+  <div class="drawer-body">
+    <input class="src-search" id="srcSearch" type="search" placeholder="Filter by name or type" aria-label="Filter the source list" autocomplete="off">
+    <div id="srcList"><div class="empty">Loading…</div></div>
+  </div>
 </aside>
 
 <aside class="drawer" id="supDrawer" role="dialog" aria-modal="true" aria-labelledby="supTitle" aria-hidden="true">

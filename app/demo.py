@@ -592,6 +592,35 @@ def report_connections(hours=24):
             "allowed_inbound": inbound}
 
 
+def build_ports(hours, sources=()):
+    """Busiest blocked and allowed firewall ports for the selected demo firewalls (all of them when none)."""
+    now = now_ms()
+    fws = [f[0] for f in FIREWALLS if not sources or f[0] in sources]
+    size = sum(2.2 if n == "HQ-Toronto" else 0.83 for n in fws)
+    r = rng("ports", hours, now // 30000)
+    base = hours * 900 * size
+
+    def rows(ports, scale, inbound_share):
+        out = []
+        for port, w in ports:
+            n = int(base * scale * w / 100 * (0.8 + .4 * r.random()))
+            if n <= 0:
+                continue
+            inb = int(n * inbound_share)
+            out.append({"port": port, "service": S["reports"].service(port), "count": n, "proto": "TCP" if port != 5060 else "UDP",
+                        "inbound": inb, "remote_ips": max(1, inb // 37) if inb else 0, "risky": port in S["reports"].RISKY_PORTS})
+        return sorted(out, key=lambda x: -x["count"])
+    denied = rows(IN_PORTS, .6, 1.0)
+    allowed = rows(OUT_PORTS + [(3389, 1)], 6, 0.0)
+    for x in allowed:                            # one RDP port published to the internet, so the demo shows EXPOSED
+        if x["port"] == 3389:
+            x["inbound"], x["remote_ips"] = x["count"], max(1, x["count"] // 60)
+    total_d = sum(x["count"] for x in denied)
+    return {"hours": hours, "sources": list(sources), "generated": iso(now), "denied_total": int(total_d * 1.25),
+            "denied_replies": int(total_d * .25), "allowed_total": sum(x["count"] for x in allowed),
+            "denied": denied if fws else [], "allowed": allowed if fws else []}
+
+
 def install(g):
     """Swap the server's data functions for the demo ones (called by server.py when DEMO=1)."""
     S.update(g)
@@ -599,6 +628,7 @@ def install(g):
                  "api_cluster", "api_storage", "api_whois", "api_reputation", "api_attacker", "report_connections"):
         g[name] = globals()[name]
     g["build_geo"] = geo
+    g["build_ports"] = build_ports
     g["snapshot_storage"] = lambda: None          # api_storage above already answers from demo data
     g["HOST_NAME"] = "observatory-demo"
     g["current_ai_hosts"] = lambda: dict(AI_HOSTS)

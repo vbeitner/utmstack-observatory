@@ -147,6 +147,17 @@ body.wall .src-chip button,body.wall .src-strip .note{display:none}
 .fill{height:100%;transition:width 900ms cubic-bezier(.22,1,.36,1)}
 .bar-val{font-family:var(--display);font-size:18px;font-weight:700;text-align:right;font-variant-numeric:tabular-nums}
 .bar-state{font-family:var(--mono);font-size:11px;color:var(--muted);text-align:right;letter-spacing:.08em}
+/* ---------- firewall ports widget ---------- */
+.ports-cols{display:grid;grid-template-columns:1fr 1fr;gap:0;flex:1;min-height:0}
+.ports-col{display:flex;flex-direction:column;min-height:0}
+.ports-col+.ports-col{border-left:1px solid var(--border)}
+.ports-col h3{margin:0;padding:10px 16px 0;font-family:var(--mono);font-size:11.5px;font-weight:600;letter-spacing:.1em;color:var(--muted)}
+.ports-col h3 b{color:var(--ink2);font-weight:600}
+.ports-col .top5-body{gap:9px}
+.ports-foot{padding:6px 16px 10px;border-top:1px solid var(--border)}
+.ports-foot .panel-meta{white-space:normal}
+.bar-state.hot{color:var(--red-ink)}
+@media (max-width:700px){ .ports-cols{grid-template-columns:1fr} .ports-col+.ports-col{border-left:0;border-top:1px solid var(--border)} }
 .alerts-body{overflow:auto;min-height:0}
 table{width:100%;border-collapse:collapse;table-layout:fixed}
 thead th{font-family:var(--mono);font-size:11.5px;font-weight:500;letter-spacing:.12em;color:var(--muted);text-align:left;padding:6px 12px 8px;border-bottom:1px solid var(--border);position:sticky;top:0;background:var(--s1)}
@@ -458,7 +469,7 @@ body.paused .mark-core,body.paused .tk.new,body.paused .live-dot{animation-play-
   </header>
   <div class="src-strip" id="srcStrip" role="status" hidden>
     <span class="k">SHOWING ONLY</span><span id="srcChips"></span>
-    <span class="note">Counters, trend, rate, donut, alert rules, latest alerts, AI traffic and the map. Trends · 30 d, reports and drill-downs still cover every source.</span>
+    <span class="note">Counters, trend, rate, donut, alert rules, latest alerts, AI traffic, firewall ports and the map. Trends · 30 d, reports and drill-downs still cover every source.</span>
     <button class="txt-btn" id="srcClear">Show all sources</button>
   </div>
   <nav class="tabbar" id="tabbar" aria-label="Screens">
@@ -609,6 +620,15 @@ body.paused .mark-core,body.paused .tk.new,body.paused .live-dot{animation-play-
         <colgroup><col style="width:88px"><col style="width:92px"><col style="width:150px"><col><col style="width:80px"><col style="width:80px"></colgroup>
         <thead><tr><th scope="col">TIME</th><th scope="col">SEVERITY</th><th scope="col">SOURCE</th><th scope="col">ALERT</th><th scope="col" style="text-align:right">EVENTS</th><th scope="col">STATUS</th></tr></thead>
         <tbody id="alertBody"></tbody></table></div>
+    </section>
+
+    <section class="panel" aria-labelledby="portsTitle" style="display:flex;flex-direction:column;min-height:0" data-widget="ports">
+      <div class="panel-head"><span class="panel-title" id="portsTitle">Firewall Ports</span><span class="spacer"></span><span class="panel-meta" id="portsMeta">24 h</span></div>
+      <div class="ports-cols">
+        <div class="ports-col"><h3>BLOCKED · <b id="portsDeniedTot">–</b> attempts</h3><div class="top5-body" id="portsDenied"><div class="empty">Loading…</div></div></div>
+        <div class="ports-col"><h3>ALLOWED · <b id="portsAllowedTot">–</b> connections</h3><div class="top5-body" id="portsAllowed"><div class="empty">Loading…</div></div></div>
+      </div>
+      <div class="ports-foot"><span class="panel-meta" id="portsNote">Click a port to show it on the map.</span></div>
     </section>
 
     <section class="panel" aria-labelledby="resTitle" style="display:flex;flex-direction:column;min-height:0" data-widget="resources">

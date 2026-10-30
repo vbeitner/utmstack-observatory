@@ -7,7 +7,7 @@ const W = (type, x, y, w, h) => ({ type, x, y, w, h });
 const overlapFree = items => items.every((a, i) => items.every((b, j) => i === j || !L.collides(a, b)));
 
 test('catalogue matches the server copy', () => {
-  assert.deepEqual(Object.keys(L.WIDGETS).sort(), ['alerts', 'donut', 'kpis', 'map', 'mapside', 'rate', 'resources', 'rules', 'trend']);
+  assert.deepEqual(Object.keys(L.WIDGETS).sort(), ['alerts', 'donut', 'kpis', 'map', 'mapside', 'ports', 'rate', 'resources', 'rules', 'trend']);
   assert.equal(L.WIDGETS.map.minW, 5); assert.equal(L.WIDGETS.map.minH, 8);
   assert.equal(L.WIDGETS.alerts.wallSafe, false); assert.equal(L.WIDGETS.map.wallSafe, 'anon');
 });

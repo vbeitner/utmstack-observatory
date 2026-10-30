@@ -1,5 +1,26 @@
 # Release notes
 
+## 1.24.0 — 2026-10-29
+
+**For users**
+- **Firewall Ports panel.** See which ports the firewalls block most and which they allow most, for the chosen time
+  range. Blocked ports show how many different internet addresses tried them; allowed ports show how many connections
+  came in from the internet. A risky service such as SSH or RDP that is reachable from the internet is shown in red
+  and marked **EXPOSED**.
+- The panel follows the source filter: pick one firewall, several, or none to see all of them.
+- Click a port to show only that port on the live map.
+- New installs have the panel on the Overview screen. On an existing install, add it with **Edit** → *Firewall ports*.
+
+**Technical**
+- New `GET /api/ports?range=1|6|24&src=…`: one aggregation on `v11-log-firewall-sophos-xg-*` (denied and success),
+  top 10 ports each by `target.port` with protocol, inbound count (remote side geolocated) and distinct
+  `origin.ip`; denied reply traffic (`REPLY_TRAFFIC`) excluded from attempts and reported as `denied_replies`; the
+  source filter applies as on the other views. Cached 30 s per (range, selection). Service names and the risky-port
+  list come from `reports.py`.
+- New widget type `ports` in `layout.js`, `layout_store.py` (added to the default Overview screen) and the layout test.
+  Demo mode supports it.
+- Tests: `tests/test_ports_widget.py`.
+
 ## 1.23.0 — 2026-10-29
 
 **For users**

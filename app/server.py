@@ -14,7 +14,7 @@ from datetime import datetime, timedelta, timezone
 from html import escape
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-VERSION = "1.23.0"
+VERSION = "1.24.0"
 HERE = os.path.dirname(os.path.abspath(__file__))
 if HERE not in sys.path:                          # the container runs "python3 -I", which leaves this folder off sys.path
     sys.path.insert(0, HERE)
@@ -1897,6 +1897,63 @@ def api_attacker(ip, anon=False, hours=24):
     return data
 
 
+# ---------------------------------------------------------------- dashboard: busiest blocked and allowed firewall ports
+PORTS_TTL_S = 30
+PORTS_TOP = 10
+_ports_cache = {}
+_ports_lock = threading.Lock()
+
+
+def build_ports(hours, sources=()):
+    """The firewall ports with the most denied and the most allowed connections in the last `hours`. Denied late
+    replies to our own connections (REPLY_TRAFFIC) are left out and counted apart: they are not attempts. "inbound" is
+    the part started from the internet (the remote side has a location)."""
+    inbound = {"exists": {"field": "origin.geolocation.latitude"}}
+    port_aggs = {"proto": {"terms": {"field": "protocol.keyword", "size": 1}},
+                 "inbound": {"filter": inbound, "aggs": {"src": {"cardinality": {"field": "origin.ip.keyword"}}}}}
+    r = os_call(FW_SEARCH + IX, {"size": 0, "track_total_hits": True, "query": {"bool": {"filter": [
+        rng("now-%dh" % hours), {"terms": {"actionResult.keyword": ["denied", "success"]}}] + src_filter(sources)}}, "aggs": {
+        "denied": {"filter": {"term": {"actionResult.keyword": "denied"}}, "aggs": {
+            "replies": {"filter": REPLY_TRAFFIC},
+            "tries": {"filter": {"bool": {"must_not": [REPLY_TRAFFIC]}}, "aggs": {
+                "ports": {"terms": {"field": "target.port", "size": PORTS_TOP}, "aggs": port_aggs}}}}},
+        "allowed": {"filter": {"term": {"actionResult.keyword": "success"}}, "aggs": {
+            "ports": {"terms": {"field": "target.port", "size": PORTS_TOP}, "aggs": port_aggs}}}}})
+    a = r.get("aggregations") or {}
+
+    def rows(buckets):
+        out = []
+        for b in buckets:
+            port = _num(b["key"], int)
+            if port is None:
+                continue
+            inb = b["inbound"]
+            out.append({"port": port, "service": reports.service(port), "count": b["doc_count"],
+                        "proto": _q(b["proto"]["buckets"][0]["key"]) if b["proto"]["buckets"] else None,
+                        "inbound": inb["doc_count"], "remote_ips": inb["src"]["value"],
+                        "risky": port in reports.RISKY_PORTS})
+        return out
+    d, ok = a.get("denied") or {}, a.get("allowed") or {}
+    return {"hours": hours, "sources": list(sources), "generated": datetime.now(timezone.utc).isoformat(),
+            "denied_total": d.get("doc_count", 0), "denied_replies": (d.get("replies") or {}).get("doc_count", 0),
+            "allowed_total": ok.get("doc_count", 0),
+            "denied": rows(((d.get("tries") or {}).get("ports") or {}).get("buckets", [])),
+            "allowed": rows((ok.get("ports") or {}).get("buckets", []))}
+
+
+def api_ports(hours=24, sources=()):
+    hours = hours if hours in RANGES_H else 24
+    key = (hours, sources)
+    with _ports_lock:
+        if len(_ports_cache) > 100:
+            _ports_cache.clear()
+        hit = _ports_cache.get(key)
+        if not hit or time.time() - hit[0] >= PORTS_TTL_S:
+            hit = (time.time(), build_ports(hours, sources))
+            _ports_cache[key] = hit
+    return hit[1]
+
+
 # ---------------------------------------------------------------- report: denied and allowed connections, 24 h
 def report_connections(hours=24):
     """Firewall traffic for the report: who was denied on which ports (inbound attackers), and which allowed
@@ -2685,6 +2742,7 @@ class Handler(BaseHTTPRequestHandler):
             "/api/users": lambda: self.api_users(),
             "/api/sources": lambda: api_sources(),
             "/api/source-list": lambda: api_source_list(),
+            "/api/ports": lambda: api_ports(int(p["range"]) if p.get("range", "").isdigit() else 24, sources),
             "/api/source": lambda: api_source(p.get("name", "")[:200]),
             "/api/alerts": lambda: api_alerts(p),
             "/api/alert": lambda: api_alert(p.get("id", "")),

@@ -14,7 +14,8 @@
     trend:     {title: 'Real-time event trend',   desc: 'Events and alerts per minute, last 30 minutes.',          minW: 4, minH: 5, w: 12, h: 7,  wallSafe: true},
     rate:      {title: 'Event rate',              desc: 'Events per second with a 60-minute sparkline.',           minW: 4, minH: 2, w: 12, h: 2,  wallSafe: true},
     alerts:    {title: 'Latest alerts',           desc: 'Newest alerts with severity and source.',                 minW: 4, minH: 5, w: 7,  h: 9,  wallSafe: false},
-    resources: {title: 'Resource utilisation',    desc: 'CPU, memory and disk of the UTMStack host.',              minW: 3, minH: 5, w: 5,  h: 9,  wallSafe: true}
+    resources: {title: 'Resource utilisation',    desc: 'CPU, memory and disk of the UTMStack host.',              minW: 3, minH: 5, w: 5,  h: 9,  wallSafe: true},
+    ports:     {title: 'Firewall ports',          desc: 'Busiest blocked and allowed ports, with attacker counts.', minW: 4, minH: 6, w: 8,  h: 9,  wallSafe: true}
   };
 
   function copy(items) { return items.map(function (i) { return {type: i.type, x: i.x, y: i.y, w: i.w, h: i.h}; }); }

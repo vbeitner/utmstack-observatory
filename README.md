@@ -10,6 +10,8 @@ A read-only operations dashboard for a UTMStack v11 SIEM. It reads UTMStack's ow
 - **Live Firewall Map**: animated arcs from every Sophos XG firewall to the cities it is talking to (outbound, inbound
   allowed, denied), top countries, and a ticker of the latest blocked inbound connections; 1 / 5 / 15 minute windows
 - **time-range picker** (1 h / 6 h / 24 h) for the counters, event-source donut, top alert rules and latest-alert list
+- **Firewall ports**: the busiest blocked and allowed ports, how many addresses tried each, and risky services
+  (SSH, RDP, SMB…) reachable from the internet; follows the time range and the source filter
 - **Source filter**: show only one data source (a firewall, a server, an M365 tenant…) or several at once; the choice
   stays on screen and survives a page refresh
 - **Movable widgets and named screens** (Edit button right of the screen tabs) with a shared default layout and
@@ -85,6 +87,23 @@ optionally from proxycheck.io for the rest (`--geoip-online-daily`, default 100 
   *Site A, Site B…* **on the server**, so the screen never receives them. Views rotate between the map and the
   counters/trend chart; panels that show data-source names (alert list, silent sources) are not shown. Press Esc to exit.
 
+## Firewall ports
+
+The **Firewall Ports** widget (on the Overview screen of new installs; otherwise add it with **Edit** → *Firewall ports*)
+shows two lists from the Sophos XG firewall logs, for the dashboard's time range (1 / 6 / 24 h):
+
+- **Blocked**: the 10 ports with the most denied connection attempts, with protocol, service name and how many
+  different internet addresses tried each. Denied late replies to our own connections (a remote port ≤ 1023 to a
+  local port ≥ 1024, e.g. an AWS server answering on 443 after the firewall closed the session) are not attempts;
+  they are left out and counted in the note under the lists.
+- **Allowed**: the 10 ports with the most allowed connections and how many of them started from the internet. A
+  risky service (SSH, Telnet, SMB, MS SQL, MySQL, RDP, VNC, PostgreSQL) with allowed connections from the internet is
+  shown red and marked **EXPOSED**.
+- It follows the **source filter**: pick one firewall, several, or none (all firewalls). Servers and tenants carry no
+  firewall port data, so selecting only those gives empty lists.
+- Click a port to put it in the map's **Port** box. Data comes from `/api/ports?range=&src=` (one aggregation,
+  shared by every browser with the same range and selection for 30 s).
+
 ## Source filter
 
 The **All sources** button in the header opens the list of every data source that sent logs in the last 24 hours,
@@ -94,8 +113,8 @@ WAN address. Tick one source or several; ticking none shows every source, as bef
 - While a filter is on, the button shows the selection and a **Showing only** bar under the header names each source
   (× removes one, **Show all sources** clears the filter). In wall mode they show only how many sources are selected.
 - The choice is kept per browser (`localStorage`), so it survives a page refresh. Other browsers are not affected.
-- Filtered: the counters, event trend and rate, event-source donut, alert rules, latest alerts, AI traffic, and the
-  live map with its side panel (arcs, pins, countries, ticker). The filter is applied on the server: every OpenSearch
+- Filtered: the counters, event trend and rate, event-source donut, alert rules, latest alerts, AI traffic, firewall
+  ports, and the live map with its side panel (arcs, pins, countries, ticker). The filter is applied on the server: every OpenSearch
   query behind those views gets a `terms` filter on `dataSource.keyword` (`?src=` on `/api/data` and `/api/geo`, up
   to 25 sources). It combines with the time range and with the map's own type, direction and port filters.
 - Not filtered: cluster health, host resources and ingest lag (they describe the SIEM itself), *Trends · 30 d*

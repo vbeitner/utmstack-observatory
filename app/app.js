@@ -373,7 +373,7 @@
     $('#kEvLbl').textContent = 'EVENTS ('+h+' H)'; $('#kAlLbl').textContent = 'ALERTS ('+h+' H)';
     $('#donutMeta').textContent = 'Share · '+rl();
     if(sideTab==='rules') $('#sideMeta').textContent = 'By alert count · '+rl();
-    poll();
+    poll(); if(typeof pollPorts === 'function') pollPorts();
   }
   $$('#rangeSeg button').forEach(function(b){ b.addEventListener('click', function(){ setRange(+b.dataset.r); }); });
   setRange(RANGE);
@@ -640,6 +640,49 @@
     mapNet = b.dataset.net; $$('#mapNetSeg button').forEach(function(x){ x.setAttribute('aria-pressed', String(x===b)); });
     if(G){ renderMapSide(); drawMap(frameT()); }
   }); });
+  /* ---------- firewall ports: busiest blocked and allowed ports for the time range and source filter ---------- */
+  var PORTS = null;
+  function portRows(rows, kind){
+    if(!rows.length) return '<div class="empty">No '+(kind==='denied' ? 'blocked' : 'allowed')+' firewall connections in the last '+rl()+(SRC.length ? ' for the selected sources' : '')+'.</div>';
+    var max = rows[0].count || 1;
+    return rows.map(function(r){
+      var label = r.port+(r.proto ? '/'+r.proto.toLowerCase() : '')+(r.service ? ' · '+r.service : '');
+      var call = kind==='denied' ? nf0.format(r.remote_ips)+' address'+(r.remote_ips===1?'':'es') : r.inbound ? nf0.format(r.inbound)+' from internet' : 'outbound / internal';
+      var hot = kind==='allowed' && r.risky && r.inbound > 0;
+      var color = kind==='denied' ? C_DENY : (hot ? C_DENY : C_IN);
+      var tip = label+': '+nf0.format(r.count)+(kind==='denied' ? ' blocked attempts' : ' allowed connections')+', '+nf0.format(r.inbound)+
+        ' started from the internet by '+nf0.format(r.remote_ips)+' address'+(r.remote_ips===1?'':'es')+(hot ? '. Risky service reachable from the internet.' : '')+' Click to show this port on the map.';
+      return '<div class="bar-row clk" tabindex="0" role="button" data-port="'+r.port+'" title="'+esc(tip)+'"><div><div class="bar-name"><span>'+esc(label)+'</span><span class="call">'+esc(call)+'</span></div>'+
+        '<div class="track"><div class="fill" style="width:'+Math.max(6, r.count/max*100)+'%;background:'+color+'"></div></div></div>'+
+        '<div><div class="bar-val" style="color:'+color+'">'+compact(r.count)+'</div><div class="bar-state'+(hot?' hot':'')+'">'+(hot ? 'EXPOSED' : kind==='denied' ? 'BLOCKED' : 'ALLOWED')+'</div></div></div>';
+    }).join('');
+  }
+  function renderPorts(){
+    if(!PORTS) return;
+    var p = PORTS;
+    $('#portsDeniedTot').textContent = compact(p.denied_total - p.denied_replies);
+    $('#portsAllowedTot').textContent = compact(p.allowed_total);
+    $('#portsDenied').innerHTML = portRows(p.denied, 'denied');
+    $('#portsAllowed').innerHTML = portRows(p.allowed, 'allowed');
+    $('#portsMeta').textContent = 'Last '+p.hours+' h'+(SRC.length ? ' · '+SRC.length+' source'+(SRC.length===1?'':'s') : '')+' · updated '+hhmmss(new Date(p.generated));
+    $('#portsNote').textContent = (p.denied_replies ? nf0.format(p.denied_replies)+' denied late replies to our own connections are not counted as attempts. ' : '')+
+      'Sophos firewall logs only. Click a port to show it on the map.';
+  }
+  function pollPorts(){
+    fetch('/api/ports?range='+RANGE+srcQuery(), {cache:'no-store'}).then(signedIn).then(function(r){ return r.json(); }).then(function(p){
+      if(p.error){ $('#portsMeta').textContent = 'Unavailable: '+p.error.slice(0,80); return; }
+      if(p.hours !== RANGE || !sameSrc(p.sources)) return;              // answer to an earlier choice
+      PORTS = p; if(liveOn) renderPorts();
+    }).catch(function(e){ $('#portsMeta').textContent = 'Unreachable ('+e.message+')'; });
+  }
+  setInterval(pollPorts, 30000); pollPorts();
+  function portClick(e){
+    var row = e.target.closest && e.target.closest('[data-port]'); if(!row) return;
+    if(e.type==='keydown' && e.key!=='Enter' && e.key!==' ') return;
+    e.preventDefault(); setMapPort(+row.getAttribute('data-port'));
+  }
+  ['#portsDenied', '#portsAllowed'].forEach(function(id){ $(id).addEventListener('click', portClick); $(id).addEventListener('keydown', portClick); });
+
   function setMapPort(v){
     mapPort = v >= 1 && v <= 65535 ? v : null;
     $('#mapPort').value = mapPort || ''; $('#mapPortForm').classList.toggle('on', !!mapPort);
@@ -1867,7 +1910,7 @@
     if(srcDrawer.classList.contains('on')) renderSrcList();
     $('#statusText').textContent = 'Loading '+(SRC.length ? SRC.length+' selected source'+(SRC.length===1?'':'s') : 'all sources')+'…';
     G = null; seenTicks = {}; drawMap(frameT());          // drop the previous selection's arcs right away
-    poll(); pollGeo();
+    poll(); pollGeo(); pollPorts();
   }
   function renderSrcList(){
     if(!srcAvail){ return; }
@@ -2235,6 +2278,7 @@
     if(liveOn){                                     // resume: show everything collected while paused, then carry on live
       var d = pendingD, g = pendingG; pendingD = pendingG = null; heldUpdates = 0;
       if(g){ G = g; renderMapSide(); }
+      renderPorts();
       if(d) apply(d); else if(D) apply(D);
       poll(); pollGeo();
     } else {

@@ -27,6 +27,7 @@ WIDGET_TYPES = {                      # keep in step with WIDGETS in app/layout.
     "rate": {"min_w": 4, "min_h": 2},
     "alerts": {"min_w": 4, "min_h": 5},
     "resources": {"min_w": 3, "min_h": 5},
+    "ports": {"min_w": 4, "min_h": 6},
 }
 
 
@@ -39,7 +40,7 @@ def default_layout():
         {"id": "overview", "name": "Overview", "wall": False, "widgets": [
             _w("kpis", 0, 0, 12, 4), _w("map", 0, 4, 8, 14), _w("donut", 8, 4, 4, 6), _w("rules", 8, 10, 4, 8),
             _w("trend", 0, 18, 12, 7), _w("rate", 0, 25, 12, 2), _w("alerts", 0, 27, 7, 9), _w("resources", 7, 27, 5, 9),
-            _w("mapside", 0, 36, 4, 9)]},
+            _w("mapside", 0, 36, 4, 9), _w("ports", 4, 36, 8, 9)]},
         {"id": "live-map", "name": "Live map", "wall": True, "widgets": [_w("map", 0, 0, 8, 18), _w("mapside", 8, 0, 4, 18)]},
         {"id": "activity", "name": "Activity", "wall": True, "widgets": [
             _w("kpis", 0, 0, 12, 4), _w("trend", 0, 4, 8, 12), _w("donut", 8, 4, 4, 6), _w("rules", 8, 10, 4, 6),

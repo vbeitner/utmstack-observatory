@@ -27,6 +27,17 @@
   try { var savedR = parseInt(localStorage.getItem('obsRange'),10); if([1,6,24].indexOf(savedR)>=0) RANGE = savedR; } catch(e){}
   function rl(){ return RANGE+' h'; }
 
+  /* ---------- source filter: [{id, name, type}] the viewer picked; empty = every source. Kept in localStorage. ---------- */
+  var SRC = [];
+  try {
+    var savedS = JSON.parse(localStorage.getItem('obsSources') || '[]');
+    if(Array.isArray(savedS)) SRC = savedS.filter(function(x){ return x && typeof x.id === 'string' && x.id; }).slice(0, 25)
+      .map(function(x){ return {id: x.id, name: String(x.name || x.id), type: String(x.type || '')}; });
+  } catch(e){}
+  function srcIds(){ return SRC.map(function(x){ return x.id; }).sort(); }
+  function srcQuery(){ return srcIds().map(function(id){ return '&src='+encodeURIComponent(id); }).join(''); }
+  function sameSrc(list){ return JSON.stringify((list||[]).slice().sort()) === JSON.stringify(srcIds()); }   // stale-answer check
+
   /* ---------- who is signed in: an invited user (email link) or the installer password ---------- */
   var ME = {role: 'admin', method: 'none', name: ''};
   function signedIn(r){ if(r.status === 401){ location.href = '/login'; throw new Error('signed out'); } return r; }
@@ -316,6 +327,7 @@
 
   function apply(data){
     if(data && data.range_h && data.range_h !== RANGE) return;   // answer to an earlier range choice
+    if(data && data.sources && !sameSrc(data.sources)) return;    // answer to an earlier source choice
     D = data;
     $('#demoTag').hidden = !data.demo;
     var err = data.error, hasData = !!data.minutes;
@@ -346,10 +358,10 @@
     $('#statusText').textContent = 'Paused · display frozen · ' + (heldUpdates ? heldUpdates+' update'+(heldUpdates===1?'':'s')+' collected in the background' : 'still collecting in the background');
   }
   function poll(){
-    fetch('/api/data?range='+RANGE, {cache:'no-store'}).then(signedIn).then(function(r){ if(!r.ok) throw new Error('HTTP '+r.status); return r.json(); })
+    fetch('/api/data?range='+RANGE+srcQuery(), {cache:'no-store'}).then(signedIn).then(function(r){ if(!r.ok) throw new Error('HTTP '+r.status); return r.json(); })
       .then(function(d){
         if(liveOn) return apply(d);
-        if(!d.range_h || d.range_h === RANGE){ pendingD = d; heldUpdates++; pausedStatus(); }
+        if((!d.range_h || d.range_h === RANGE) && (!d.sources || sameSrc(d.sources))){ pendingD = d; heldUpdates++; pausedStatus(); }
       }).catch(function(e){ if(liveOn) apply(Object.assign({}, D||{}, {error:'server unreachable ('+e.message+')'})); });
   }
   setInterval(poll, 3000);
@@ -581,7 +593,8 @@
       (g.arcs_total > g.arcs.length ? 'Showing the busiest '+g.arcs.length+' of '+g.arcs_total+' routes. ' : '') +
       'Locations from UTMStack GeoIP and IP Geolocation by DB-IP (db-ip.com, CC BY 4.0); VPN/hosting ranges from X4BNet, Tor exits from the Tor Project. Private addresses are not mapped.' +
       (g.geoip && !g.geoip.db ? ' The location database is still downloading — attackers from Linux, Syslog and Windows appear once it is ready.' : '');
-    $('#mapMeta').textContent = 'Last '+winLbl+(mapPort ? ' · port '+mapPort : '')+' · updated '+hhmmss(new Date(g.generated));
+    $('#mapMeta').textContent = 'Last '+winLbl+(mapPort ? ' · port '+mapPort : '')+(SRC.length ? ' · '+SRC.length+' source'+(SRC.length===1?'':'s') : '')+
+      ' · updated '+hhmmss(new Date(g.generated));
     $('#mapSummary').textContent = nf0.format(g.per_min)+' firewall connections per minute, '+dr.toFixed(1)+'% denied. Top country: '+(countries[0] ? countries[0].country : 'none')+'.';
   }
   function showMapFallback(show){
@@ -597,9 +610,10 @@
   function pollGeo(){
     if(!GEO_TYPES[mapType]){ showMapFallback(true); return; }
     showMapFallback(false);
-    fetch('/api/geo?window='+mapWin+'&type='+encodeURIComponent(mapType)+(mapPort?'&port='+mapPort:'')+(mapAnon?'&anon=1':''), {cache:'no-store'}).then(function(r){ return r.json(); }).then(function(g){
+    fetch('/api/geo?window='+mapWin+'&type='+encodeURIComponent(mapType)+(mapPort?'&port='+mapPort:'')+(mapAnon?'&anon=1':'')+srcQuery(), {cache:'no-store'}).then(function(r){ return r.json(); }).then(function(g){
       if(g.error){ $('#mapMeta').textContent = 'Map unavailable: '+g.error.slice(0,80); return; }
-      if(!!g.anonymized !== mapAnon || g.window_s !== mapWin || g.type !== mapType || (g.port||null) !== mapPort) return;   // stale answer after a toggle
+      if(!!g.anonymized !== mapAnon || g.window_s !== mapWin || g.type !== mapType || (g.port||null) !== mapPort ||
+         (g.sources && !sameSrc(g.sources))) return;   // stale answer after a toggle
       if(!liveOn){ pendingG = g; return; }
       G = g; renderMapSide(); if(reduceMotion) drawMap(0);
     }).catch(function(e){ $('#mapMeta').textContent = 'Map unreachable ('+e.message+')'; });
@@ -846,6 +860,7 @@
   function setWall(on){
     wallOn = on; mapAnon = on;
     document.body.classList.toggle('wall', on);
+    renderSrcState();
     $('#wallBtn').setAttribute('aria-pressed', String(on));
     clearInterval(wallTimer);
     if(on){ preWallScreen = BOARD.screenId; wallIdx = 0; wallStep(); wallTimer = setInterval(wallStep, 30000); }
@@ -1828,6 +1843,98 @@
   $('#closeSup').addEventListener('click', closeSup);
   overlay.addEventListener('click', function(){ if(supDrawer.classList.contains('on')) closeSup(); });
   document.addEventListener('keydown', function(e){ if(e.key==='Escape' && supDrawer.classList.contains('on')) closeSup(); });
+
+  /* ---- source filter: header button, "Showing only" strip, picker drawer ---- */
+  var srcDrawer = $('#srcDrawer'), srcAvail = null;
+  function srcLabel(x){ return x.name + (x.name !== x.id ? ' ('+x.id+')' : ''); }
+  function renderSrcState(){
+    var n = SRC.length, names = SRC.map(function(x){ return x.name; });
+    $('#srcBtn').setAttribute('aria-pressed', String(n > 0));
+    // the wall screen hides client names: counts only
+    $('#srcBtnText').textContent = !n ? 'All sources' : wallOn ? n+' source'+(n===1?'':'s') : n === 1 ? names[0] : names[0]+' +'+(n-1);
+    $('#srcBtn').title = n ? 'Showing only: '+(wallOn ? n+' sources' : names.join(', '))+'. Click to change.' : 'Show only some data sources (firewalls, servers, tenants)';
+    $('#srcStrip').hidden = !n;
+    $('#srcChips').innerHTML = wallOn ? '<span class="src-chip"><span>'+n+' selected source'+(n===1?'':'s')+'</span></span>' :
+      SRC.map(function(x, i){
+        return '<span class="src-chip" title="'+esc(srcLabel(x)+(x.type ? ' · '+(MAP_TYPE_LABEL[x.type]||x.type) : ''))+'"><span>'+esc(x.name)+'</span>'+
+          '<button type="button" data-i="'+i+'" aria-label="Stop showing only '+esc(x.name)+'">×</button></span>';
+      }).join(' ');
+  }
+  function setSources(list){
+    SRC = list.slice(0, 25);
+    try { if(SRC.length) localStorage.setItem('obsSources', JSON.stringify(SRC)); else localStorage.removeItem('obsSources'); } catch(e){}
+    renderSrcState();
+    if(srcDrawer.classList.contains('on')) renderSrcList();
+    $('#statusText').textContent = 'Loading '+(SRC.length ? SRC.length+' selected source'+(SRC.length===1?'':'s') : 'all sources')+'…';
+    G = null; seenTicks = {}; drawMap(frameT());          // drop the previous selection's arcs right away
+    poll(); pollGeo();
+  }
+  function renderSrcList(){
+    if(!srcAvail){ return; }
+    var q = $('#srcSearch').value.trim().toLowerCase(), picked = {};
+    SRC.forEach(function(x){ picked[x.id] = true; });
+    // selected sources that sent nothing in 24 h still get a row, so they can be unticked
+    var rows = srcAvail.concat(SRC.filter(function(x){ return !srcAvail.some(function(a){ return a.id === x.id; }); })
+      .map(function(x){ return {id: x.id, name: x.name, type: x.type, events: null}; }));
+    rows = rows.filter(function(x){
+      return !q || (x.name+' '+x.id+' '+x.type+' '+(MAP_TYPE_LABEL[x.type]||'')).toLowerCase().indexOf(q) >= 0;
+    });
+    var groups = {};
+    rows.forEach(function(x){ (groups[x.type || 'other'] = groups[x.type || 'other'] || []).push(x); });
+    var html = Object.keys(groups).sort().map(function(t){
+      return '<div class="src-group"><h3>'+esc((MAP_TYPE_LABEL[t] || t).toUpperCase())+'</h3>'+groups[t].map(function(x){
+        var on = !!picked[x.id];
+        return '<label class="src-row'+(on?' on':'')+'"><input type="checkbox" data-id="'+esc(x.id)+'"'+(on?' checked':'')+'>'+
+          '<span class="n" title="'+esc(srcLabel(x))+'">'+esc(srcLabel(x))+'</span>'+
+          '<span class="c">'+(x.events == null ? 'no events in 24 h' : compact(x.events)+' · 24 h')+'</span></label>';
+      }).join('')+'</div>';
+    }).join('');
+    $('#srcList').innerHTML = html || '<div class="empty">'+(q ? 'No source matches “'+esc(q)+'”.' : 'No data sources sent logs in the last 24 hours.')+'</div>';
+    $('#srcMeta').textContent = SRC.length ? SRC.length+' of '+srcAvail.length+' selected' : 'None ticked: every source is shown';
+  }
+  function openSrc(){
+    overlay.classList.add('on'); srcDrawer.classList.add('on'); srcDrawer.setAttribute('aria-hidden','false');
+    $('#srcList').innerHTML = '<div class="empty">Loading…</div>';
+    fetch('/api/source-list', {cache:'no-store'}).then(signedIn).then(function(r){ return r.json(); })
+      .then(function(d){
+        if(d.error) throw new Error(d.error);
+        srcAvail = d.sources || [];
+        // refresh stored names/types (a firewall renamed since it was picked)
+        var byId = {}; srcAvail.forEach(function(x){ byId[x.id] = x; });
+        if(SRC.some(function(x){ return byId[x.id] && (byId[x.id].name !== x.name || byId[x.id].type !== x.type); })){
+          SRC = SRC.map(function(x){ return byId[x.id] ? {id: x.id, name: byId[x.id].name, type: byId[x.id].type} : x; });
+          try { localStorage.setItem('obsSources', JSON.stringify(SRC)); } catch(e){}
+          renderSrcState();
+        }
+        renderSrcList();
+      })
+      .catch(function(e){ $('#srcList').innerHTML = '<div class="empty">Could not load the source list: '+esc(e.message)+'</div>'; });
+    $('#srcSearch').focus();
+  }
+  function closeSrc(){
+    srcDrawer.classList.remove('on'); srcDrawer.setAttribute('aria-hidden','true');
+    if(!document.querySelector('.drawer.on')) overlay.classList.remove('on');
+    $('#srcBtn').focus();
+  }
+  $('#srcBtn').addEventListener('click', openSrc);
+  $('#closeSrc').addEventListener('click', closeSrc);
+  overlay.addEventListener('click', function(){ if(srcDrawer.classList.contains('on')) closeSrc(); });
+  document.addEventListener('keydown', function(e){ if(e.key==='Escape' && srcDrawer.classList.contains('on')) closeSrc(); });
+  $('#srcSearch').addEventListener('input', renderSrcList);
+  $('#srcList').addEventListener('change', function(e){
+    var id = e.target && e.target.getAttribute('data-id'); if(id == null) return;
+    var x = srcAvail.filter(function(a){ return a.id === id; })[0] || SRC.filter(function(a){ return a.id === id; })[0];
+    if(e.target.checked){ if(SRC.length >= 25){ e.target.checked = false; $('#srcMeta').textContent = 'At most 25 sources at once'; return; }
+                          setSources(SRC.concat([{id: x.id, name: x.name, type: x.type}])); }
+    else setSources(SRC.filter(function(a){ return a.id !== id; }));
+  });
+  $('#srcAll').addEventListener('click', function(){ setSources([]); });
+  $('#srcClear').addEventListener('click', function(){ setSources([]); });
+  $('#srcChips').addEventListener('click', function(e){
+    var b = e.target.closest && e.target.closest('button[data-i]'); if(!b) return;
+    var i = +b.getAttribute('data-i'); setSources(SRC.filter(function(_, k){ return k !== i; }));
+  });
+  renderSrcState();
 
   /* ---- settings drawer: dashboard login, API keys, support contact, map home/sites, AI hosts ---- */
   var setDrawer = $('#setDrawer');

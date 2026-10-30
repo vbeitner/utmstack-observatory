@@ -187,17 +187,22 @@ def ai_section():
             "hourly": hourly}
 
 
-def collect(hours=24):
+def collect(hours=24, sources=()):
     now = now_ms()
     m0 = (now // 60000 - 60) * 60000
     window_alerts = alerts_between(now - hours * 3600000, now)
+    share, picked = 1.0, None
+    if sources:                                  # a source selection scales the event counts by those sources' share
+        picked = [(n, t) for n, t in source_list() if n in sources]
+        share = sum(source_share(n, t) for n, t in picked)
+        window_alerts = [a for a in window_alerts if a["source"] in sources]
     minutes = []
     for k in range(60):
         t = m0 + k * 60000
-        minutes.append({"t": t, "events": int(events_per_min(t)), "alerts": sum(1 for a in window_alerts if t <= a["t_ms"] < t + 60000)})
-    per_hour = [events_per_min(now - h * 3600000) * 60 for h in range(hours)]
+        minutes.append({"t": t, "events": int(events_per_min(t) * share), "alerts": sum(1 for a in window_alerts if t <= a["t_ms"] < t + 60000)})
+    per_hour = [events_per_min(now - h * 3600000) * 60 * share for h in range(hours)]
     ev = int(sum(per_hour))
-    prev = int(sum(events_per_min(now - (hours + h) * 3600000) * 60 for h in range(hours)))
+    prev = int(sum(events_per_min(now - (hours + h) * 3600000) * 60 * share for h in range(hours)))
     sev = {}
     for a in window_alerts:
         sev[a["sev"]] = sev.get(a["sev"], 0) + 1
@@ -207,12 +212,16 @@ def collect(hours=24):
         x["count"] += 1
     peak = max(minutes, key=lambda m: m["events"])
     return {
-        "now": iso(now), "range_h": hours, "minutes": minutes, "demo": True,
-        "kpi": {"sources_online": len(FIREWALLS) + len(SERVERS), "sources_total": len(FIREWALLS) + len(SERVERS),
+        "now": iso(now), "range_h": hours, "sources": list(sources), "minutes": minutes, "demo": True,
+        "kpi": {"sources_online": len(picked) if sources else len(FIREWALLS) + len(SERVERS),
+                "sources_total": len(picked) if sources else len(FIREWALLS) + len(SERVERS),
                 "sources_stale": [], "events_24h": ev, "events_prev_24h": prev, "alerts_24h": len(window_alerts), "sev": sev,
                 "lag_s": 1.1 + rng("lag", now // 10000).random(), "eps_5m": round(sum(m["events"] for m in minutes[-5:]) / 300, 2),
                 "peak": {"t": peak["t"], "n": peak["events"]}},
-        "types": [{"name": t, "count": int(ev * s)} for t, s in sorted(TYPE_SHARE.items(), key=lambda x: -x[1])],
+        "types": [{"name": t, "count": int(ev * s)} for t, s in sorted(TYPE_SHARE.items(), key=lambda x: -x[1])]
+        if not sources else
+        [{"name": t, "count": int(ev * sum(source_share(n, t_) for n, t_ in picked if t_ == t) / share)}
+         for t in TYPE_SHARE if share and any(t_ == t for _, t_ in picked)],
         "rules": sorted(rules.values(), key=lambda x: -x["count"])[:5],
         "alerts": [row(a) for a in window_alerts[:15]],
         "cluster": {"status": "green", "unassigned": 0, "nodes": 1, "active_pct": 100.0},
@@ -235,7 +244,7 @@ def fetch_hourly(gte):
 
 
 # ---------------------------------------------------------------- live map
-def geo(window=60, dtype="all", port=None):
+def geo(window=60, dtype="all", port=None, sources=()):
     now = now_ms()
     slot = now // 10000
     scale = window / 60
@@ -247,7 +256,7 @@ def geo(window=60, dtype="all", port=None):
                                        "loc_source": "configured", "total": 0, "denied": 0})
 
     def add(site_d, dtype_, direction, ci, count, denied, port_, j=0):
-        if count <= 0 or (dtype != "all" and dtype != dtype_) or (port and port_ != port):
+        if count <= 0 or (dtype != "all" and dtype != dtype_) or (port and port_ != port) or (sources and site_d["id"] not in sources):
             return
         c = CITIES[ci]
         net = net_of(c[0], j) if direction == "in" else None
@@ -302,9 +311,10 @@ def geo(window=60, dtype="all", port=None):
                        "site": a["site"], "type": a["type"], "lat": a["lat"], "lon": a["lon"],
                        "net": "tor" if a["tor"] else "vpn" if a["vpn"] else "hosting" if a["hosting"] else None})
     used = {a["site"] for a in arcs}
-    return {"window_s": window, "type": dtype, "port": port, "generated": iso(now), "age_s": 1.4, "total": total,
+    return {"window_s": window, "type": dtype, "port": port, "sources": list(sources), "generated": iso(now), "age_s": 1.4, "total": total,
             "denied": denied, "failed": 0, "per_min": round(total * 60 / window), "home": home,
-            "sites": [s for s in sites.values() if s["id"] in used or s["id"] in dict((f[0], 1) for f in FIREWALLS)],
+            "sites": [s for s in sites.values() if (s["id"] in used or s["id"] in dict((f[0], 1) for f in FIREWALLS))
+                      and (not sources or s["id"] in sources)],
             "arcs": [{k: v for k, v in a.items() if k not in ("type", "port")} for a in arcs[:200]],
             "arcs_total": len(arcs),
             "countries": sorted(countries.values(), key=lambda x: -x["count"])[:12], "ticker": ticker,
@@ -317,15 +327,29 @@ def source_list():
     return out
 
 
+def source_share(name, t):
+    """A demo source's share of all events (firewalls split their type's share, HQ the biggest)."""
+    share = TYPE_SHARE[t] / (len(FIREWALLS) if t == "firewall-sophos-xg" else 1)
+    if t == "firewall-sophos-xg":
+        share *= 2.2 if name == "HQ-Toronto" else 0.83
+    return share
+
+
+def api_source_list():
+    now = now_ms()
+    day = sum(events_per_min(now - h * 3600000) * 60 for h in range(24))
+    out = [{"id": n, "name": n, "type": t, "events": int(day * source_share(n, t)), "last": now - 1200}
+           for n, t in source_list()]
+    return {"sources": sorted(out, key=lambda x: (x["type"], x["name"].lower()))}
+
+
 def api_sources():
     now = now_ms()
     day = int(sum(events_per_min(now - h * 3600000) * 60 for h in range(24)))
     al = alerts_between(now - 24 * 3600000, now)
     rows = []
     for name, t in source_list():
-        share = TYPE_SHARE[t] / (len(FIREWALLS) if t == "firewall-sophos-xg" else 1)
-        if t == "firewall-sophos-xg":
-            share *= 2.2 if name == "HQ-Toronto" else 0.83
+        share = source_share(name, t)
         n = int(day * share)
         rows.append({"name": name, "events": n, "share": n / day * 100, "type": t, "types": [t],
                      "last": now - rng("last", name, now // 5000).randrange(400, 4000),
@@ -571,7 +595,7 @@ def report_connections(hours=24):
 def install(g):
     """Swap the server's data functions for the demo ones (called by server.py when DEMO=1)."""
     S.update(g)
-    for name in ("collect", "fetch_hourly", "api_sources", "api_source", "api_alerts", "api_alert", "compute_lag",
+    for name in ("collect", "fetch_hourly", "api_sources", "api_source_list", "api_source", "api_alerts", "api_alert", "compute_lag",
                  "api_cluster", "api_storage", "api_whois", "api_reputation", "api_attacker", "report_connections"):
         g[name] = globals()[name]
     g["build_geo"] = geo

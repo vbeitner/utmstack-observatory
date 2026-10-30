@@ -10,6 +10,8 @@ A read-only operations dashboard for a UTMStack v11 SIEM. It reads UTMStack's ow
 - **Live Firewall Map**: animated arcs from every Sophos XG firewall to the cities it is talking to (outbound, inbound
   allowed, denied), top countries, and a ticker of the latest blocked inbound connections; 1 / 5 / 15 minute windows
 - **time-range picker** (1 h / 6 h / 24 h) for the counters, event-source donut, top alert rules and latest-alert list
+- **Source filter**: show only one data source (a firewall, a server, an M365 tenant…) or several at once; the choice
+  stays on screen and survives a page refresh
 - **Movable widgets and named screens** (Edit button right of the screen tabs) with a shared default layout and
   personal per-browser layouts
 - **Wall mode** for a NOC screen: full screen, client firewall names replaced by *Site A, Site B…*, rotating every 30 s
@@ -82,6 +84,24 @@ optionally from proxycheck.io for the rest (`--geoip-online-daily`, default 100 
 - **Wall mode** (button in the header, or open `/?wall=1`): firewall names and WAN addresses are replaced by
   *Site A, Site B…* **on the server**, so the screen never receives them. Views rotate between the map and the
   counters/trend chart; panels that show data-source names (alert list, silent sources) are not shown. Press Esc to exit.
+
+## Source filter
+
+The **All sources** button in the header opens the list of every data source that sent logs in the last 24 hours,
+grouped by type (firewall, Linux, Windows, syslog, Microsoft 365…). Firewalls are listed by device name with their
+WAN address. Tick one source or several; ticking none shows every source, as before.
+
+- While a filter is on, the button shows the selection and a **Showing only** bar under the header names each source
+  (× removes one, **Show all sources** clears the filter). In wall mode they show only how many sources are selected.
+- The choice is kept per browser (`localStorage`), so it survives a page refresh. Other browsers are not affected.
+- Filtered: the counters, event trend and rate, event-source donut, alert rules, latest alerts, AI traffic, and the
+  live map with its side panel (arcs, pins, countries, ticker). The filter is applied on the server: every OpenSearch
+  query behind those views gets a `terms` filter on `dataSource.keyword` (`?src=` on `/api/data` and `/api/geo`, up
+  to 25 sources). It combines with the time range and with the map's own type, direction and port filters.
+- Not filtered: cluster health, host resources and ingest lag (they describe the SIEM itself), *Trends · 30 d*
+  (hourly totals kept locally, not per source), reports and the drill-down views.
+- The list comes from `/api/source-list` (one aggregation, cached 60 s). Filtered views are built on request and
+  shared for a few seconds between browsers with the same selection; the unfiltered 24 h view is unchanged.
 
 ## Security
 

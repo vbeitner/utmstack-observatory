@@ -18,7 +18,6 @@
 #          --abuseipdb-key KEY   --virustotal-key KEY   (live IP reputation on alert detail)
 #          --proxycheck-key KEY  --geoip-online-daily N   (online fallback for attacker IP location / VPN; default 100/day, 0 = off)
 #          --no-health-fix   (no "Apply fix" button in the SIEM-health panel; it shows the commands instead)
-#          --no-real-ip-rule (do not exempt the dashboard from Tailscale's address rewriting; see ensure_real_ip)
 #          --os-account reader|backend   (reader: dedicated read-only OpenSearch user, the default; backend: UTMStack's admin)
 #          --admin-email ADDR  (invite this address as an admin; it signs in with an emailed link once email is set up)
 #          --public-url URL    (the address people open, e.g. https://observatory.example.com:8765; sign-in links point here)
@@ -122,68 +121,25 @@ ensure_os_fixer() {
   info "OpenSearch: SIEM-health fix button uses $FIXER_USER (role $FIXER_ROLE: replica settings only)"
 }
 
-# ---------------------------------------------------------------- real client addresses over Tailscale
-# Tailscale masquerades everything it forwards from tailscale0 (unless --snat-subnet-routes=false), and traffic to the
-# dashboard's container counts as forwarded. Every Tailscale user would then reach the dashboard as the
-# docker_gwbridge gateway and share one login lockout and connection cap. This exempts only the dashboard's container
-# port from that masquerade; replies still go back out through tailscale0. Nothing else about Tailscale changes.
+# ---------------------------------------------------------------- legacy real-address rule cleanup
+# Installs up to 1.24 could add a systemd unit and script of this name that adjusted NAT for a VPN that is no longer
+# used. Nothing installs them now; install and uninstall only remove what an older version left behind.
 REALIP_UNIT=utmstack-observatory-real-ip
 REALIP_SCRIPT=${REALIP_SCRIPT:-/usr/local/sbin/$REALIP_UNIT}; SYSTEMD_DIR=${SYSTEMD_DIR:-/etc/systemd/system}
-REALIP_RULE='-o docker_gwbridge -p tcp --dport 8765 -m mark --mark 0x40000/0xff0000 -m comment --comment utmstack-observatory-real-client-ip -j ACCEPT'
 
-realip_script() {
-  cat <<EOS
-#!/bin/sh
-# Managed by utmstack-observatory install.sh: Tailscale clients keep their own address at the dashboard.
-R='$REALIP_RULE'
-# shellcheck disable=SC2086
-del() { while iptables -t nat -D POSTROUTING \$R 2>/dev/null; do :; done; }
-case "\${1:-start}" in
-  stop) del ;;
-  *) i=0   # tailscaled sets up its chains a moment after it starts: wait for them, then go first
-     while [ \$i -lt 30 ] && ! iptables -t nat -S ts-postrouting >/dev/null 2>&1; do i=\$((i+1)); sleep 1; done
-     del; iptables -t nat -I POSTROUTING 1 \$R ;;
-esac
-EOS
-}
-
-realip_unit() {
-  cat <<EOS
-[Unit]
-Description=UTMStack Observatory: Tailscale clients keep their own address (installed by install.sh)
-After=docker.service tailscaled.service
-PartOf=tailscaled.service
-
-[Service]
-Type=oneshot
-RemainAfterExit=yes
-ExecStart=$REALIP_SCRIPT start
-ExecStop=$REALIP_SCRIPT stop
-
-[Install]
-WantedBy=multi-user.target tailscaled.service
-EOS
-}
-
-remove_real_ip() {
+remove_legacy_real_ip() {
+  local found=0
   if [ -f "$SYSTEMD_DIR/$REALIP_UNIT.service" ]; then
+    found=1
     systemctl disable --now "$REALIP_UNIT" >/dev/null 2>&1 || true
     rm -f "$SYSTEMD_DIR/$REALIP_UNIT.service"; systemctl daemon-reload >/dev/null 2>&1 || true
   fi
-  [ -x "$REALIP_SCRIPT" ] && "$REALIP_SCRIPT" stop || true
-  rm -f "$REALIP_SCRIPT"
-}
-
-ensure_real_ip() {
-  if [ "${REAL_IP_RULE:-1}" != 1 ]; then remove_real_ip; info "Tailscale real-address rule off (--no-real-ip-rule)"; return 0; fi
-  ip link show tailscale0 >/dev/null 2>&1 || return 0           # no Tailscale here: nothing rewrites addresses
-  command -v iptables >/dev/null 2>&1 && command -v systemctl >/dev/null 2>&1 \
-    || { warn "Tailscale found but iptables/systemd missing: Tailscale users will share one login lockout"; return 0; }
-  realip_script > "$REALIP_SCRIPT"; chmod 755 "$REALIP_SCRIPT"
-  realip_unit > "$SYSTEMD_DIR/$REALIP_UNIT.service"
-  systemctl daemon-reload && systemctl enable "$REALIP_UNIT" >/dev/null 2>&1 && systemctl restart "$REALIP_UNIT" \
-    && info "Tailscale users keep their own address at the dashboard (service $REALIP_UNIT)" \
-    || warn "could not start $REALIP_UNIT: Tailscale users may share one login lockout"
+  if [ -e "$REALIP_SCRIPT" ]; then
+    found=1
+    [ -x "$REALIP_SCRIPT" ] && "$REALIP_SCRIPT" stop >/dev/null 2>&1 || true
+    rm -f "$REALIP_SCRIPT"
+  fi
+  [ "$found" = 0 ] || info "Removed the legacy $REALIP_UNIT unit left by an older install"
 }
 
 # Sourced by the tests for the functions above; nothing below runs then.
@@ -197,7 +153,7 @@ case "${1:-}" in install|uninstall|status|logs|password) CMD="$1"; shift;; esac
 # defaults, overridden by the saved config from a previous install, then by flags
 PORT=8765; DASH_USER=admin; AI_HOSTS=""; TLS=0; TZ_NAME=""; STACK=""; SITES=""; HOME_LOC=""; SUPPORT=""
 DASH_USER_FLAG=0; ABUSEIPDB_FLAG=0; VIRUSTOTAL_FLAG=0
-TLS_CERT_SRC=""; TLS_KEY_SRC=""; NEW_PASS=""; IMPORT=""; PURGE=0; ABUSEIPDB_KEY=""; VIRUSTOTAL_KEY=""; PROXYCHECK_KEY=""; GEOIP_ONLINE_DAILY=100; OS_ACCOUNT=reader; HEALTH_FIX=1; REAL_IP_RULE=1
+TLS_CERT_SRC=""; TLS_KEY_SRC=""; NEW_PASS=""; IMPORT=""; PURGE=0; ABUSEIPDB_KEY=""; VIRUSTOTAL_KEY=""; PROXYCHECK_KEY=""; GEOIP_ONLINE_DAILY=100; OS_ACCOUNT=reader; HEALTH_FIX=1
 ADMIN_EMAIL=""; PUBLIC_URL=""
 [ -f "$CONF" ] || TLS=1                          # new installs: HTTPS with a self-signed certificate unless --no-tls
 # shellcheck disable=SC1090
@@ -217,7 +173,7 @@ while [ $# -gt 0 ]; do
     --abuseipdb-key) ABUSEIPDB_KEY="$2"; ABUSEIPDB_FLAG=1; shift 2;;  --virustotal-key) VIRUSTOTAL_KEY="$2"; VIRUSTOTAL_FLAG=1; shift 2;;
     --proxycheck-key) PROXYCHECK_KEY="$2"; shift 2;;  --geoip-online-daily) GEOIP_ONLINE_DAILY="$2"; shift 2;;
     --no-health-fix) HEALTH_FIX=0; shift;;  --health-fix) HEALTH_FIX=1; shift;;
-    --no-real-ip-rule) REAL_IP_RULE=0; shift;;  --real-ip-rule) REAL_IP_RULE=1; shift;;
+    --no-real-ip-rule|--real-ip-rule) warn "$1 is obsolete and ignored"; shift;;
     --os-account) case "$2" in reader|backend) OS_ACCOUNT="$2";; *) die "--os-account: use reader or backend";; esac; shift 2;;
     --admin-email) ADMIN_EMAIL="$2"; shift 2;;  --public-url) PUBLIC_URL="${2%/}"; shift 2;;
     --purge) PURGE=1; shift;;               -h|--help) sed -n '2,23p' "$0"; exit 0;;
@@ -237,7 +193,7 @@ case "$CMD" in
   logs) exec docker service logs --tail 100 "$SERVICE";;
   uninstall)
     info "Removing service"; docker service rm "$SERVICE" 2>/dev/null || true
-    remove_real_ip
+    remove_legacy_real_ip
     sleep 3
     for s in $(docker secret ls --filter "label=$LABEL=1" --format '{{.Name}}'); do docker secret rm "$s" >/dev/null 2>&1 || true; done
     if [ "$PURGE" = 1 ]; then
@@ -428,7 +384,7 @@ for _ in $(seq 1 45); do
   sleep 2
 done
 if [ "$ok" != 1 ]; then docker service logs --tail 30 "$SERVICE" 2>&1 || true; die "the dashboard did not come up; see the log above"; fi
-ensure_real_ip
+remove_legacy_real_ip
 if [ -n "$OVERRIDDEN" ]; then
   info "Login check skipped: the Settings panel overrides the installer's login ($OVERRIDDEN); sign in with that one"
 else
@@ -439,8 +395,8 @@ else
   [ "$auth" = 200 ] || warn "login check returned HTTP $auth"
 fi
 
-{ printf 'PORT=%q\nDASH_USER=%q\nAI_HOSTS=%q\nTLS=%q\nTZ_NAME=%q\nSTACK=%q\nSITES=%q\nHOME_LOC=%q\nSUPPORT=%q\nABUSEIPDB_KEY=%q\nVIRUSTOTAL_KEY=%q\nPROXYCHECK_KEY=%q\nGEOIP_ONLINE_DAILY=%q\nOS_ACCOUNT=%q\nHEALTH_FIX=%q\nREAL_IP_RULE=%q\nADMIN_EMAIL=%q\nPUBLIC_URL=%q\n' \
-    "$PORT" "$DASH_USER" "$AI_HOSTS" "$TLS" "$TZ_NAME" "$STACK" "$SITES" "$HOME_LOC" "$SUPPORT" "$ABUSEIPDB_KEY" "$VIRUSTOTAL_KEY" "$PROXYCHECK_KEY" "$GEOIP_ONLINE_DAILY" "$OS_ACCOUNT" "$HEALTH_FIX" "$REAL_IP_RULE" "$ADMIN_EMAIL" "$PUBLIC_URL"
+{ printf 'PORT=%q\nDASH_USER=%q\nAI_HOSTS=%q\nTLS=%q\nTZ_NAME=%q\nSTACK=%q\nSITES=%q\nHOME_LOC=%q\nSUPPORT=%q\nABUSEIPDB_KEY=%q\nVIRUSTOTAL_KEY=%q\nPROXYCHECK_KEY=%q\nGEOIP_ONLINE_DAILY=%q\nOS_ACCOUNT=%q\nHEALTH_FIX=%q\nADMIN_EMAIL=%q\nPUBLIC_URL=%q\n' \
+    "$PORT" "$DASH_USER" "$AI_HOSTS" "$TLS" "$TZ_NAME" "$STACK" "$SITES" "$HOME_LOC" "$SUPPORT" "$ABUSEIPDB_KEY" "$VIRUSTOTAL_KEY" "$PROXYCHECK_KEY" "$GEOIP_ONLINE_DAILY" "$OS_ACCOUNT" "$HEALTH_FIX" "$ADMIN_EMAIL" "$PUBLIC_URL"
   [ -n "$TLS_CERT_SRC" ] && printf 'TLS_CERT_SRC=%q\nTLS_KEY_SRC=%q\n' "$TLS_CERT_SRC" "$TLS_KEY_SRC"; } > "$CONF"; chmod 600 "$CONF"
 
 echo

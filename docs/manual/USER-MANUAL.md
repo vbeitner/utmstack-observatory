@@ -70,7 +70,7 @@ Open the address your administrator gave you, for example `https://siem-server:8
 
 - After **5 wrong passwords** from the same address, that address is locked out for **15 minutes**, even if the next
   attempt is correct. Both numbers can be changed (see [Configuration reference](#15-configuration-reference)).
-  The dashboard sees each user's real address, also over Tailscale (since 1.21), so one person's typos never lock
+  The dashboard sees each user's real address, so one person's typos never lock
   anyone else out. If many wrong passwords arrive from many addresses at once, every failed attempt is slowed down
   instead, so nobody is locked out by someone else's attack.
 - To change the password, use the [Settings panel](#12-settings-panel) or `sudo ./install.sh password` on the server.
@@ -442,7 +442,6 @@ Options are remembered in `/etc/utmstack-observatory/config.env`; pass one again
 | `--proxycheck-key KEY` | none | proxycheck.io key for the online location fallback |
 | `--geoip-online-daily N` | `100` | Daily cap on online lookups; `0` disables them |
 | `--no-health-fix` | button on | No *Apply fix* button in the SIEM-health panel (commands only) |
-| `--no-real-ip-rule` | rule on | Do not install the firewall rule that keeps Tailscale users' real addresses (only installed when Tailscale is present) |
 | `--os-account reader\|backend` | `reader` | OpenSearch account for the dashboard: the read-only `observatory_reader`, or UTMStack's administrator |
 | `--admin-email ADDR` | | Add this address as an admin; it signs in by email link once email is set up |
 | `--public-url URL` | | The address people open, e.g. `https://observatory.example.com:8765`; sign-in links point here |
@@ -493,7 +492,6 @@ Only needed when running `app/server.py` yourself; the installer sets them for y
 | Installer settings | `/etc/utmstack-observatory/config.env` |
 | Dashboard password | `/etc/utmstack-observatory/admin.pass` (root only); a password set in Settings is stored hashed |
 | OpenSearch account passwords | `/etc/utmstack-observatory/os_reader.pass`, `os_fixer.pass` (root only) |
-| Tailscale real-address rule | `/usr/local/sbin/utmstack-observatory-real-ip` and the systemd unit `utmstack-observatory-real-ip` |
 
 ## 16. Security and privacy
 
@@ -519,10 +517,8 @@ Only needed when running `app/server.py` yourself; the installer sets them for y
 - **Encryption**: new installs use HTTPS with a self-signed certificate (browsers warn once; `--tls-cert`/`--tls-key`
   for your own). Installs from before 1.16 keep plain HTTP until re-run with `--tls`.
   The installer publishes the port in Swarm's host mode on the manager node, so the dashboard sees each user's real
-  address (the login lockout and connection limits are per user, not shared). Where Tailscale runs on the server it
-  also adds one firewall rule (and a small boot service) that exempts the dashboard's port from Tailscale's address
-  rewriting, so Tailscale users are seen individually too; nothing else about Tailscale changes. The port still listens on every
-  interface, so restrict it with the host firewall, for example:
+  address (the login lockout and connection limits are per user, not shared). The port still listens on every
+  interface, so restrict it with the host firewall, for example to the private NetBird network (100.64.0.0/10):
   `iptables -I DOCKER-USER -p tcp --dport 8765 ! -s 100.64.0.0/10 -j DROP`.
 - **What leaves the server**: public IP addresses for WHOIS (rdap.org), reputation (AbuseIPDB, VirusTotal, only if
   keys are set) and the optional location fallback (proxycheck.io); periodic downloads of IP location and VPN/Tor
@@ -543,8 +539,7 @@ The security assessment is in [`../security/SECURITY-ASSESSMENT.md`](../security
 | Ingest lag ~1 s but feeds are late | The headline is the newest event; click the card for the per-source delay. |
 | AI Traffic empty or low | It only sees traffic that crosses the firewall, not traffic inside the LAN. |
 | Street map does not appear | The browser cannot reach `tiles.openfreemap.org`; the outline map is used instead. |
-| Locked out | Wait 15 minutes, or restart the service (`sudo docker service update --force utmstack-observatory`), which clears the lockout. If *everyone* is locked out at once, all users share one address: re-run `sudo ./install.sh` (1.21 or later also covers Tailscale). |
-| Everyone over Tailscale appears as one address (`172.18.0.1` in `login:` log lines) | The real-address rule is missing: re-run `sudo ./install.sh`, and check `systemctl status utmstack-observatory-real-ip`. |
+| Locked out | Wait 15 minutes, or restart the service (`sudo docker service update --force utmstack-observatory`), which clears the lockout. If *everyone* is locked out at once, all users share one address: re-run `sudo ./install.sh`. |
 | Log line `hint: the first 100 connections all came from 10.0.0.2 …` | The port still goes through Swarm's ingress mesh (or a proxy), so all users share one address. Re-run `sudo ./install.sh` (1.18 or later). |
 | Installer: "Login check skipped: the Settings panel overrides the installer's login" | Normal. Sign in with the login set in the Settings panel, or reset it with `sudo ./install.sh password`. |
 | Anything else | `sudo ./install.sh logs` and `sudo ./install.sh status`; **Copy diagnostics** in the health panel. |

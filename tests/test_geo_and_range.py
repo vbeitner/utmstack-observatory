@@ -198,7 +198,7 @@ class GeoMap(unittest.TestCase):
     def test_syslog_ip_extraction_skips_private_addresses(self):
         self.assertEqual(self.s.syslog_ip("Connection closed by invalid user x 2.57.122.238 port 1 [preauth]"), "2.57.122.238")
         self.assertIsNone(self.s.syslog_ip("Accepted publickey for a from 192.168.1.5 port 22"))
-        self.assertIsNone(self.s.syslog_ip("from 100.123.152.25 port 22"))      # Tailscale / CGNAT
+        self.assertIsNone(self.s.syslog_ip("from 100.123.152.25 port 22"))      # CGNAT (NetBird)
         self.assertIsNone(self.s.syslog_ip("version 1.2.3.4.5 build"))
 
     def test_one_failing_attacker_source_does_not_blank_the_map(self):

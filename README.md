@@ -64,7 +64,6 @@ Common options:
 | `--abuseipdb-key KEY` / `--virustotal-key KEY` | enable live IP-reputation lookups on alert detail (see Security) |
 | `--os-account reader\|backend` | OpenSearch account for the dashboard: the dedicated read-only user (default) or UTMStack's administrator |
 | `--no-health-fix` | no *Apply fix* button in the SIEM-health panel; it shows the commands only |
-| `--no-real-ip-rule` | do not install the firewall rule that keeps Tailscale users' real addresses (see Security) |
 
 Other commands: `sudo ./install.sh status | logs | password [NEW] | uninstall [--purge]`.
 `uninstall` keeps your stored history; `--purge` deletes it, the config and the image.
@@ -140,15 +139,12 @@ WAN address. Tick one source or several; ticking none shows every source, as bef
   installer to switch an older install. If the log shows a `hint: the first 100 connections all came from …` line,
   the port is still going through the mesh (or a proxy). Checks run on the server itself (`curl 127.0.0.1`) arrive from
   Docker's bridge gateway (e.g. `172.18.0.1`), not `127.0.0.1`.
-- **Tailscale users keep their own address (1.21+).** Tailscale masquerades everything it forwards from `tailscale0`,
-  including traffic to the dashboard's container, so all Tailscale users used to arrive as `172.18.0.1` and share one
-  lockout. Where `tailscale0` exists, the installer installs `/usr/local/sbin/utmstack-observatory-real-ip` and the
-  systemd unit `utmstack-observatory-real-ip`, which put one `nat POSTROUTING` rule first: Tailscale-marked packets
-  to container port 8765 on `docker_gwbridge` are not masqueraded. The unit re-runs after `tailscaled` restarts and at
-  boot; `uninstall` and `--no-real-ip-rule` remove it. Nothing else about Tailscale changes.
+- **Legacy real-address unit.** Older installs (1.21 to 1.24) could add `/usr/local/sbin/utmstack-observatory-real-ip`
+  and a systemd unit of the same name. The installer no longer adds them; `install` and `uninstall` remove any that an
+  older version left behind. `--no-real-ip-rule` is accepted but ignored.
 - **Password guessing from many addresses** (more than `LOGIN_SURGE_PER_MIN`, default 30 failures a minute in total)
   slows every failed attempt to 3 s instead of locking anyone out.
-- **Swarm publishes the port on every interface.** Restrict it with your firewall. Example allowing only Tailscale and localhost:
+- **Swarm publishes the port on every interface.** Restrict it with your firewall. Example allowing only the private NetBird network (100.64.0.0/10) and localhost:
   `iptables -I DOCKER-USER -p tcp --dport 8765 ! -s 100.64.0.0/10 -j DROP` (adapt, and persist it your usual way).
 - The container is read-only, drops all capabilities, runs as an unprivileged user, and has no Docker socket. It only *reads* OpenSearch.
 - **Read-only OpenSearch account.** The installer uses UTMStack's backend credentials (the OpenSearch administrator) only

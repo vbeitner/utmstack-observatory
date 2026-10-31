@@ -1,5 +1,23 @@
 # Release notes
 
+## Unreleased — 2026-10-31
+
+**For users**
+- The installer no longer sets anything up for Tailscale. If an older version added the "real address" service for
+  Tailscale users, re-running the installer (or uninstalling) removes it. Nothing changes in how you sign in; the
+  dashboard still sees each user's own address. The documentation now describes restricting the port to the private
+  NetBird network.
+
+**Technical**
+- `install.sh`: `ensure_real_ip`, the `tailscale0` check, the NAT rule script and the `tailscaled`-bound systemd unit
+  are gone. New `remove_legacy_real_ip` runs on install and uninstall and removes `/usr/local/sbin/utmstack-observatory-real-ip`
+  and `utmstack-observatory-real-ip.service` if an older install left them (calling the old script's `stop` first so
+  its NAT rule goes too). `--no-real-ip-rule` / `--real-ip-rule` are accepted with an "obsolete" warning;
+  `REAL_IP_RULE` is no longer written to `config.env` (an old value there is ignored).
+- `tests/test_real_ip.py` now covers the legacy cleanup. CGNAT (100.64.0.0/10) handling in the app is unchanged.
+- README, user manual (Markdown and regenerated PDF) updated. Past release notes and the security assessment are
+  historical and unchanged.
+
 ## 1.24.0 — 2026-10-29
 
 **For users**
